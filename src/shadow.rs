@@ -3,6 +3,7 @@ use syntax::ast::*;
 use syntax::codemap::Span;
 use syntax::visit::FnKind;
 
+use rustc::ast_map::Node::*;
 use rustc::lint::{Context, LintArray, LintPass};
 use rustc::middle::def::Def::{DefVariant, DefStruct};
 
@@ -156,7 +157,7 @@ fn lint_shadow<T>(cx: &Context, name: Name, span: Span, lspan: Span, init:
                 snippet(cx, lspan, "_"),
                 snippet(cx, expr.span, "..")));
         } else {
-            if contains_self(name, expr) {
+            if contains_self(cx, name, expr) {
                 span_note_and_lint(cx, SHADOW_REUSE, lspan, &format!(
                     "{} is shadowed by {} which reuses the original value",
                     snippet(cx, lspan, "_"),
@@ -253,72 +254,98 @@ fn path_eq_name(name: Name, path: &Path) -> bool {
         path.segments[0].identifier.name == name
 }
 
-fn contains_self(name: Name, expr: &Expr) -> bool {
+fn contains_self(cx: &Context, name: Name, expr: &Expr) -> bool {
     match expr.node {
         ExprUnary(_, ref e) | ExprParen(ref e) | ExprField(ref e, _) |
         ExprTupField(ref e, _) | ExprAddrOf(_, ref e) | ExprBox(_, ref e)
-            => contains_self(name, e),
+            => contains_self(cx, name, e),
         ExprBinary(_, ref l, ref r) =>
-            contains_self(name, l) || contains_self(name, r),
+            contains_self(cx, name, l) || contains_self(cx, name, r),
         ExprBlock(ref block) | ExprLoop(ref block, _) =>
-            contains_block_self(name, block),
-        ExprCall(ref fun, ref args) => contains_self(name, fun) ||
-            args.iter().any(|ref a| contains_self(name, a)),
+            contains_block_self(cx, name, block),
+        ExprCall(ref fun, ref args) => contains_self(cx, name, fun) ||
+            args.iter().any(|ref a| contains_self(cx, name, a)),
         ExprMethodCall(_, _, ref args) =>
-            args.iter().any(|ref a| contains_self(name, a)),
+            args.iter().any(|ref a| contains_self(cx, name, a)),
         ExprVec(ref v) | ExprTup(ref v) =>
-            v.iter().any(|ref e| contains_self(name, e)),
+            v.iter().any(|ref e| contains_self(cx, name, e)),
         ExprIf(ref cond, ref then, ref otherwise) =>
-            contains_self(name, cond) || contains_block_self(name, then) ||
-            otherwise.as_ref().map_or(false, |ref e| contains_self(name, e)),
+            contains_self(cx, name, cond) ||
+            contains_block_self(cx, name, then) ||
+            otherwise.as_ref().map_or(false,
+                |ref e| contains_self(cx, name, e)),
         ExprWhile(ref e, ref block, _)  =>
-            contains_self(name, e) || contains_block_self(name, block),
+            contains_self(cx, name, e) || contains_block_self(cx, name, block),
         ExprMatch(ref e, ref arms, _) =>
             arms.iter().any(|ref arm| arm.pats.iter().any(|ref pat|
-                contains_pat_self(name, pat))) || contains_self(name, e),
-        ExprPath(_, ref path) => path_eq_name(name, path),
+                contains_pat_self(cx, name, pat))) || contains_self(cx, name, e),
+        ExprPath(_, ref path) => path_eq_name(name, path) || {
+            if let Some(ref path_res) =
+                    cx.tcx.def_map.borrow().get(&expr.id) {
+                let def_id = path_res.def_id();
+                if !def_id.is_local() { return false; }
+                if let Some(ref node) = cx.tcx.map.find(def_id.local_id()) {
+                    return match *node {
+                        NodeExpr(ref e) => contains_self(cx, name, e),
+                        NodeBlock(ref b) => contains_block_self(cx, name, b),
+                        NodeLocal(ref p) |
+                        NodePat(ref p) => contains_pat_self(cx, name, p),
+                        NodeStmt(ref s) => contains_stmt_self(cx, name, s),
+                        _ => false
+                    }
+                }
+            }
+            false
+        },
         _ => false
     }
 }
 
-fn contains_block_self(name: Name, block: &Block) -> bool {
-    for stmt in &block.stmts {
-        match stmt.node {
-            StmtDecl(ref decl, _) =>
+fn contains_stmt_self(cx: &Context, name: Name, stmt: &Stmt) -> bool {
+    match stmt.node {
+        StmtDecl(ref decl, _) =>
             if let DeclLocal(ref local) = decl.node {
                 //TODO: We don't currently handle the case where the name
                 //is shadowed wiithin the block; this means code including this
                 //degenerate pattern will get the wrong warning.
                 if let Some(ref init) = local.init {
-                    if contains_self(name, init) { return true; }
-                }
-            },
-            StmtExpr(ref e, _) | StmtSemi(ref e, _) =>
-                if contains_self(name, e) { return true },
-            _ => ()
-        }
+                    contains_self(cx, name, init)
+                } else { false }
+            } else { false },
+        StmtExpr(ref e, _) | StmtSemi(ref e, _) =>
+            contains_self(cx, name, e),
+        _ => false
     }
-    if let Some(ref e) = block.expr { contains_self(name, e) } else { false }
 }
 
-fn contains_pat_self(name: Name, pat: &Pat) -> bool {
+fn contains_block_self(cx: &Context, name: Name, block: &Block) -> bool {
+    for stmt in &block.stmts {
+        if contains_stmt_self(cx, name, stmt) { return true; }
+    }
+    if let Some(ref e) = block.expr {
+        contains_self(cx, name, e)
+    } else { false }
+}
+
+fn contains_pat_self(cx: &Context, name: Name, pat: &Pat) -> bool {
     match pat.node {
         PatIdent(_, ref ident, ref inner) => name == ident.node.name ||
-            inner.as_ref().map_or(false, |ref p| contains_pat_self(name, p)),
+            inner.as_ref().map_or(false, |ref p| contains_pat_self(cx, name, p)),
         PatEnum(_, ref opats) => opats.as_ref().map_or(false,
-            |pats| pats.iter().any(|p| contains_pat_self(name, p))),
+            |pats| pats.iter().any(|p| contains_pat_self(cx, name, p))),
         PatQPath(_, ref path) => path_eq_name(name, path),
         PatStruct(_, ref fieldpats, _) => fieldpats.iter().any(
-            |ref fp| contains_pat_self(name, &fp.node.pat)),
-        PatTup(ref ps) => ps.iter().any(|ref p| contains_pat_self(name, p)),
+            |ref fp| contains_pat_self(cx, name, &fp.node.pat)),
+        PatTup(ref ps) => ps.iter().any(|ref p| contains_pat_self(cx, name, p)),
         PatBox(ref p) |
-        PatRegion(ref p, _) => contains_pat_self(name, p),
+        PatRegion(ref p, _) => contains_pat_self(cx, name, p),
         PatRange(ref from, ref until) =>
-            contains_self(name, from) || contains_self(name, until),
+            contains_self(cx, name, from) || contains_self(cx, name, until),
         PatVec(ref pre, ref opt, ref post) =>
-            pre.iter().any(|ref p| contains_pat_self(name, p)) ||
-                opt.as_ref().map_or(false, |ref p| contains_pat_self(name, p)) ||
-                post.iter().any(|ref p| contains_pat_self(name, p)),
+            pre.iter().any(|ref p| contains_pat_self(cx, name, p)) ||
+                opt.as_ref().map_or(false,
+                    |ref p| contains_pat_self(cx, name, p)) ||
+                post.iter().any(|ref p| contains_pat_self(cx, name, p)),
         _ => false,
     }
 }
