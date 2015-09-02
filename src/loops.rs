@@ -17,7 +17,7 @@ use utils::{VEC_PATH, LL_PATH};
 declare_lint!{ pub NEEDLESS_RANGE_LOOP, Warn,
                "for-looping over a range of indices where an iterator over items would do" }
 
-declare_lint!{ pub EXPLICIT_ITER_LOOP, Warn,
+declare_lint!{ pub EXPLICIT_ITER_LOOP, Allow,
                "for-looping over `_.iter()` or `_.iter_mut()` when `&_` or `&mut _` would do" }
 
 declare_lint!{ pub ITER_NEXT_LOOP, Warn,

@@ -100,7 +100,7 @@ fn check_nan(cx: &LateContext, path: &Path, span: Span) {
     });
 }
 
-declare_lint!(pub FLOAT_CMP, Warn,
+declare_lint!(pub FLOAT_CMP, Allow,
               "using `==` or `!=` on float values (as floating-point operations \
                usually involve rounding errors, it is always better to check for approximate \
                equality within small bounds)");

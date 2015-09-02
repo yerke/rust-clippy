@@ -52,7 +52,7 @@ impl LateLintPass for TypePass {
 #[allow(missing_copy_implementations)]
 pub struct LetPass;
 
-declare_lint!(pub LET_UNIT_VALUE, Warn,
+declare_lint!(pub LET_UNIT_VALUE, Allow,
               "creating a let binding to a value of unit type, which usually can't be used afterwards");
 
 fn check_let_unit(cx: &LateContext, decl: &Decl) {

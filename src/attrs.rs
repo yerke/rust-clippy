@@ -8,7 +8,7 @@ use syntax::attr::*;
 use syntax::ast::{Attribute, MetaList, MetaWord};
 use utils::{in_macro, match_path, span_lint};
 
-declare_lint! { pub INLINE_ALWAYS, Warn,
+declare_lint! { pub INLINE_ALWAYS, Allow,
     "`#[inline(always)]` is a bad idea in most cases" }
 
 
