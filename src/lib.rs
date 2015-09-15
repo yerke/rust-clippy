@@ -47,6 +47,7 @@ pub mod loops;
 pub mod ranges;
 pub mod matches;
 pub mod precedence;
+pub mod cow;
 
 mod reexport {
     pub use syntax::ast::{Name, Ident, NodeId};
@@ -87,6 +88,7 @@ pub fn plugin_registrar(reg: &mut Registry) {
     reg.register_lint_pass(box matches::MatchPass as LintPassObject);
     reg.register_lint_pass(box misc::PatternPass as LintPassObject);
     reg.register_lint_pass(box minmax::MinMaxPass as LintPassObject);
+    reg.register_lint_pass(box cow::CowPass as LintPassObject);
 
     reg.register_lint_group("clippy_pedantic", vec![
         methods::OPTION_UNWRAP_USED,
@@ -113,6 +115,7 @@ pub fn plugin_registrar(reg: &mut Registry) {
         bit_mask::BAD_BIT_MASK,
         bit_mask::INEFFECTIVE_BIT_MASK,
         collapsible_if::COLLAPSIBLE_IF,
+        cow::GOT_MILK,
         eq_op::EQ_OP,
         eta_reduction::REDUNDANT_CLOSURE,
         identity_op::IDENTITY_OP,

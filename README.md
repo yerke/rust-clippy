@@ -6,7 +6,7 @@ A collection of lints that give helpful tips to newbies and catch oversights.
 [Jump to usage instructions](#usage)
 
 ##Lints
-There are 57 lints included in this crate:
+There are 58 lints included in this crate:
 
 name                                                                                                   | default | meaning
 -------------------------------------------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -23,6 +23,7 @@ name                                                                            
 [eq_op](https://github.com/Manishearth/rust-clippy/wiki#eq_op)                                         | warn    | equal operands on both sides of a comparison or bitwise combination (e.g. `x == x`)
 [explicit_iter_loop](https://github.com/Manishearth/rust-clippy/wiki#explicit_iter_loop)               | warn    | for-looping over `_.iter()` or `_.iter_mut()` when `&_` or `&mut _` would do
 [float_cmp](https://github.com/Manishearth/rust-clippy/wiki#float_cmp)                                 | warn    | using `==` or `!=` on float values (as floating-point operations usually involve rounding errors, it is always better to check for approximate equality within small bounds)
+[got_milk](https://github.com/Manishearth/rust-clippy/wiki#got_milk)                                   | warn    | look for `String`s that are only instantiated from `&'static str`s or non-stringy sources, suggest Cow
 [identity_op](https://github.com/Manishearth/rust-clippy/wiki#identity_op)                             | warn    | using identity operations, e.g. `x + 0` or `y / 1`
 [ineffective_bit_mask](https://github.com/Manishearth/rust-clippy/wiki#ineffective_bit_mask)           | warn    | expressions where a bit mask will be rendered useless by a comparison, e.g. `(x | 1) > 2`
 [inline_always](https://github.com/Manishearth/rust-clippy/wiki#inline_always)                         | warn    | `#[inline(always)]` is a bad idea in most cases
