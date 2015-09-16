@@ -53,7 +53,8 @@ impl<'v, 't> Visitor<'v> for CowVisitor<'v, 't> {
         let tcx = &self.cx.tcx;
         let param_env = Some(ty::ParameterEnvironment::for_item(tcx, id));
         let infcx = infer::new_infer_ctxt(tcx, &tcx.tables, param_env, false);
-        euv::ExprUseVisitor::new(self, &infcx).walk_fn(fd, b);
+        let vis = euv::ExprUseVisitor::new(self as &mut euv::Delegate<'t>, &infcx);
+        vis.walk_fn(fd, b);
     }
 
     fn visit_item(&mut self, i: &'v Item) {
