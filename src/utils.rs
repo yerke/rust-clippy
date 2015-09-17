@@ -6,6 +6,7 @@ use rustc::front::map::Node::*;
 use rustc::middle::def_id::DefId;
 use rustc::middle::ty;
 use std::borrow::Cow;
+use syntax::ast::Lit_::*;
 
 // module DefPaths for certain structs/enums we check for
 pub const OPTION_PATH: [&'static str; 3] = ["core", "option", "Option"];
@@ -28,34 +29,34 @@ pub fn in_macro(cx: &Context, span: Span) -> bool {
 /// returns true if the macro that expanded the crate was outside of
 /// the current crate or was a compiler plugin
 pub fn in_external_macro(cx: &Context, span: Span) -> bool {
-	/// invokes in_macro with the expansion info of the given span
-	/// slightly heavy, try to use this after other checks have already happened
-	fn in_macro_ext(cx: &Context, opt_info: Option<&ExpnInfo>) -> bool {
-		// no ExpnInfo = no macro
-		opt_info.map_or(false, |info| {
-			match info.callee.format {
-				ExpnFormat::CompilerExpansion(..) => {
-					if info.callee.name() == "closure expansion" {
-						return false;
-					}
-				},
-				ExpnFormat::MacroAttribute(..) => {
-					// these are all plugins
-					return true;
-				},
-				_ => (),
-			}
-			// no span for the callee = external macro
-			info.callee.span.map_or(true, |span| {
-				// no snippet = external macro or compiler-builtin expansion
-				cx.sess().codemap().span_to_snippet(span).ok().map_or(true, |code|
-					// macro doesn't start with "macro_rules"
-					// = compiler plugin
-					!code.starts_with("macro_rules")
-				)
-			})
-		})
-	}
+    /// invokes in_macro with the expansion info of the given span
+    /// slightly heavy, try to use this after other checks have already happened
+    fn in_macro_ext(cx: &Context, opt_info: Option<&ExpnInfo>) -> bool {
+        // no ExpnInfo = no macro
+        opt_info.map_or(false, |info| {
+            match info.callee.format {
+                ExpnFormat::CompilerExpansion(..) => {
+                    if info.callee.name() == "closure expansion" {
+                        return false;
+                    }
+                },
+                ExpnFormat::MacroAttribute(..) => {
+                    // these are all plugins
+                    return true;
+                },
+                _ => (),
+            }
+            // no span for the callee = external macro
+            info.callee.span.map_or(true, |span| {
+                // no snippet = external macro or compiler-builtin expansion
+                cx.sess().codemap().span_to_snippet(span).ok().map_or(true, |code|
+                    // macro doesn't start with "macro_rules"
+                    // = compiler plugin
+                    !code.starts_with("macro_rules")
+                )
+            })
+        })
+    }
 
     cx.sess().codemap().with_expn_info(span.expn_id,
             |info| in_macro_ext(cx, info))
@@ -242,6 +243,17 @@ pub fn walk_ptrs_ty_depth(ty: ty::Ty) -> (ty::Ty, usize) {
         }
     }
     inner(ty, 0)
+}
+
+pub fn is_integer_literal(expr: &Expr, value: u64) -> bool
+{
+    // FIXME: use constant folding
+    if let ExprLit(ref spanned) = expr.node {
+        if let LitInt(v, _) = spanned.node {
+            return v == value;
+        }
+    }
+    false
 }
 
 /// Produce a nested chain of if-lets and ifs from the patterns:

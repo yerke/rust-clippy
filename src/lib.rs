@@ -1,6 +1,6 @@
 #![feature(plugin_registrar, box_syntax)]
 #![feature(rustc_private, core, collections)]
-#![feature(str_split_at, num_bits_bytes)]
+#![feature(num_bits_bytes)]
 #![allow(unknown_lints)]
 
 #[macro_use]
@@ -122,6 +122,7 @@ pub fn plugin_registrar(reg: &mut Registry) {
         len_zero::LEN_WITHOUT_IS_EMPTY,
         len_zero::LEN_ZERO,
         lifetimes::NEEDLESS_LIFETIMES,
+        loops::EXPLICIT_COUNTER_LOOP,
         loops::EXPLICIT_ITER_LOOP,
         loops::ITER_NEXT_LOOP,
         loops::NEEDLESS_RANGE_LOOP,
