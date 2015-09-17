@@ -122,7 +122,7 @@ fn check_struct(cv: &mut CowVisitor, def: &StructDef, is_public: bool) {
 }
 
 //TODO: What do we need to look at?
-impl<'v, 't: 'v> euv::Delegate<'v> for CowVisitor<'v, 't> {
+impl<'v, 't: 'v> euv::Delegate<'t> for CowVisitor<'v, 't> {
     fn consume(&mut self, consume_id: NodeId, consume_span: Span,
             cmt: cmt<'v>, mode: euv::ConsumeMode) {
         //TODO
