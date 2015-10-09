@@ -4,7 +4,7 @@ use reexport::*;
 use syntax::codemap::Span;
 use rustc_front::visit::FnKind;
 
-use rustc::lint::{Context, Level, Lint, LintArray, LintPass};
+use rustc::lint::*;
 use rustc::middle::def::Def::{DefVariant, DefStruct};
 
 use utils::{in_external_macro, snippet, span_lint, span_note_and_lint};
@@ -25,14 +25,17 @@ impl LintPass for ShadowPass {
         lint_array!(SHADOW_SAME, SHADOW_REUSE, SHADOW_UNRELATED)
     }
 
-    fn check_fn(&mut self, cx: &Context, _: FnKind, decl: &FnDecl,
+}
+
+impl LateLintPass for ShadowPass {
+    fn check_fn(&mut self, cx: &LateContext, _: FnKind, decl: &FnDecl,
             block: &Block, _: Span, _: NodeId) {
         if in_external_macro(cx, block.span) { return; }
         check_fn(cx, decl, block);
     }
 }
 
-fn check_fn(cx: &Context, decl: &FnDecl, block: &Block) {
+fn check_fn(cx: &LateContext, decl: &FnDecl, block: &Block) {
     let mut bindings = Vec::new();
     for arg in &decl.inputs {
         if let PatIdent(_, ident, _) = arg.pat.node {
@@ -42,7 +45,7 @@ fn check_fn(cx: &Context, decl: &FnDecl, block: &Block) {
     check_block(cx, block, &mut bindings);
 }
 
-fn check_block(cx: &Context, block: &Block, bindings: &mut Vec<(Name, Span)>) {
+fn check_block(cx: &LateContext, block: &Block, bindings: &mut Vec<(Name, Span)>) {
     let len = bindings.len();
     for stmt in &block.stmts {
         match stmt.node {
@@ -55,7 +58,7 @@ fn check_block(cx: &Context, block: &Block, bindings: &mut Vec<(Name, Span)>) {
     bindings.truncate(len);
 }
 
-fn check_decl(cx: &Context, decl: &Decl, bindings: &mut Vec<(Name, Span)>) {
+fn check_decl(cx: &LateContext, decl: &Decl, bindings: &mut Vec<(Name, Span)>) {
     if in_external_macro(cx, decl.span) { return; }
     if let DeclLocal(ref local) = decl.node {
         let Local{ ref pat, ref ty, ref init, id: _, span } = **local;
@@ -69,14 +72,14 @@ fn check_decl(cx: &Context, decl: &Decl, bindings: &mut Vec<(Name, Span)>) {
     }
 }
 
-fn is_binding(cx: &Context, pat: &Pat) -> bool {
+fn is_binding(cx: &LateContext, pat: &Pat) -> bool {
     match cx.tcx.def_map.borrow().get(&pat.id).map(|d| d.full_def()) {
         Some(DefVariant(..)) | Some(DefStruct(..)) => false,
         _ => true
     }
 }
 
-fn check_pat(cx: &Context, pat: &Pat, init: &Option<&Expr>, span: Span,
+fn check_pat(cx: &LateContext, pat: &Pat, init: &Option<&Expr>, span: Span,
         bindings: &mut Vec<(Name, Span)>) {
     //TODO: match more stuff / destructuring
     match pat.node {
@@ -103,9 +106,9 @@ fn check_pat(cx: &Context, pat: &Pat, init: &Option<&Expr>, span: Span,
             if let Some(ref init_struct) = *init {
                 if let ExprStruct(_, ref efields, _) = init_struct.node {
                     for field in pfields {
-                        let ident = field.node.ident;
+                        let name = field.node.name;
                         let efield = efields.iter()
-                            .find(|ref f| f.ident.node == ident)
+                            .find(|ref f| f.name.node == name)
                             .map(|f| &*f.expr);
                         check_pat(cx, &field.node.pat, &efield, span, bindings);
                     }
@@ -137,7 +140,7 @@ fn check_pat(cx: &Context, pat: &Pat, init: &Option<&Expr>, span: Span,
             },
         PatBox(ref inner) => {
             if let Some(ref initp) = *init {
-                if let ExprBox(_, ref inner_init) = initp.node {
+                if let ExprBox(ref inner_init) = initp.node {
                     check_pat(cx, inner, &Some(&**inner_init), span, bindings);
                 } else {
                     check_pat(cx, inner, init, span, bindings);
@@ -153,9 +156,9 @@ fn check_pat(cx: &Context, pat: &Pat, init: &Option<&Expr>, span: Span,
     }
 }
 
-fn lint_shadow<T>(cx: &Context, name: Name, span: Span, lspan: Span, init:
+fn lint_shadow<T>(cx: &LateContext, name: Name, span: Span, lspan: Span, init:
         &Option<T>, prev_span: Span) where T: Deref<Target=Expr> {
-    fn note_orig(cx: &Context, lint: &'static Lint, span: Span) {
+    fn note_orig(cx: &LateContext, lint: &'static Lint, span: Span) {
         if cx.current_level(lint) != Level::Allow {
             cx.sess().span_note(span, "previous binding is here");
         }
@@ -191,14 +194,12 @@ fn lint_shadow<T>(cx: &Context, name: Name, span: Span, lspan: Span, init:
     }
 }
 
-fn check_expr(cx: &Context, expr: &Expr, bindings: &mut Vec<(Name, Span)>) {
+fn check_expr(cx: &LateContext, expr: &Expr, bindings: &mut Vec<(Name, Span)>) {
     if in_external_macro(cx, expr.span) { return; }
     match expr.node {
-        ExprUnary(_, ref e) | ExprParen(ref e) | ExprField(ref e, _) |
-        ExprTupField(ref e, _) | ExprAddrOf(_, ref e) | ExprBox(None, ref e)
+        ExprUnary(_, ref e) | ExprField(ref e, _) |
+        ExprTupField(ref e, _) | ExprAddrOf(_, ref e) | ExprBox(ref e)
             => { check_expr(cx, e, bindings) },
-        ExprBox(Some(ref place), ref e) => {
-            check_expr(cx, place, bindings); check_expr(cx, e, bindings) }
         ExprBlock(ref block) | ExprLoop(ref block, _) =>
             { check_block(cx, block, bindings) },
         //ExprCall
@@ -233,7 +234,7 @@ fn check_expr(cx: &Context, expr: &Expr, bindings: &mut Vec<(Name, Span)>) {
     }
 }
 
-fn check_ty(cx: &Context, ty: &Ty, bindings: &mut Vec<(Name, Span)>) {
+fn check_ty(cx: &LateContext, ty: &Ty, bindings: &mut Vec<(Name, Span)>) {
     match ty.node {
         TyParen(ref sty) | TyObjectSum(ref sty, _) |
         TyVec(ref sty) => check_ty(cx, sty, bindings),
@@ -251,12 +252,11 @@ fn check_ty(cx: &Context, ty: &Ty, bindings: &mut Vec<(Name, Span)>) {
 
 fn is_self_shadow(name: Name, expr: &Expr) -> bool {
     match expr.node {
-        ExprBox(_, ref inner) |
-        ExprParen(ref inner) |
+        ExprBox(ref inner) |
         ExprAddrOf(_, ref inner) => is_self_shadow(name, inner),
         ExprBlock(ref block) => block.stmts.is_empty() && block.expr.as_ref().
             map_or(false, |ref e| is_self_shadow(name, e)),
-        ExprUnary(op, ref inner) => (UnUniq == op || UnDeref == op) &&
+        ExprUnary(op, ref inner) => (UnDeref == op) &&
             is_self_shadow(name, inner),
         ExprPath(_, ref path) => path_eq_name(name, path),
         _ => false,
@@ -275,8 +275,8 @@ fn contains_self(name: Name, expr: &Expr) -> bool {
         // no subexprs
         ExprLit(_) => false,
         // one subexpr
-        ExprUnary(_, ref e) | ExprParen(ref e) | ExprField(ref e, _) |
-        ExprTupField(ref e, _) | ExprAddrOf(_, ref e) | ExprBox(_, ref e) |
+        ExprUnary(_, ref e) | ExprField(ref e, _) |
+        ExprTupField(ref e, _) | ExprAddrOf(_, ref e) | ExprBox(ref e) |
         ExprCast(ref e, _) =>
             contains_self(name, e),
         // two subexprs

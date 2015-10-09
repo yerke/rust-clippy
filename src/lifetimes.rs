@@ -18,21 +18,23 @@ impl LintPass for LifetimePass {
     fn get_lints(&self) -> LintArray {
         lint_array!(NEEDLESS_LIFETIMES)
     }
+}
 
-    fn check_item(&mut self, cx: &Context, item: &Item) {
+impl LateLintPass for LifetimePass {
+    fn check_item(&mut self, cx: &LateContext, item: &Item) {
         if let ItemFn(ref decl, _, _, _, ref generics, _) = item.node {
             check_fn_inner(cx, decl, None, &generics, item.span);
         }
     }
 
-    fn check_impl_item(&mut self, cx: &Context, item: &ImplItem) {
+    fn check_impl_item(&mut self, cx: &LateContext, item: &ImplItem) {
         if let MethodImplItem(ref sig, _) = item.node {
             check_fn_inner(cx, &sig.decl, Some(&sig.explicit_self),
                            &sig.generics, item.span);
         }
     }
 
-    fn check_trait_item(&mut self, cx: &Context, item: &TraitItem) {
+    fn check_trait_item(&mut self, cx: &LateContext, item: &TraitItem) {
         if let MethodTraitItem(ref sig, _) = item.node {
             check_fn_inner(cx, &sig.decl, Some(&sig.explicit_self),
                            &sig.generics, item.span);
@@ -49,7 +51,7 @@ enum RefLt {
 }
 use self::RefLt::*;
 
-fn check_fn_inner(cx: &Context, decl: &FnDecl, slf: Option<&ExplicitSelf>,
+fn check_fn_inner(cx: &LateContext, decl: &FnDecl, slf: Option<&ExplicitSelf>,
                   generics: &Generics, span: Span) {
     if in_external_macro(cx, span) || has_where_lifetimes(&generics.where_clause) {
         return;
@@ -87,6 +89,9 @@ fn could_use_elision(func: &FnDecl, slf: Option<&ExplicitSelf>,
     // extract lifetimes in input argument types
     for arg in &func.inputs {
         walk_ty(&mut input_visitor, &arg.ty);
+        if let TyRptr(None, _) = arg.ty.node {
+            input_visitor.record(&None);
+        }
     }
     // extract lifetimes in output type
     if let Return(ref ty) = func.output {
@@ -159,7 +164,7 @@ struct RefVisitor(Vec<RefLt>);
 impl RefVisitor {
     fn record(&mut self, lifetime: &Option<Lifetime>) {
         if let &Some(ref lt) = lifetime {
-            if lt.name == "'static" {
+            if lt.name.as_str() == "'static" {
                 self.0.push(Static);
             } else {
                 self.0.push(Named(lt.name));
@@ -175,18 +180,17 @@ impl RefVisitor {
 }
 
 impl<'v> Visitor<'v> for RefVisitor {
-    // for lifetimes of references
-    fn visit_opt_lifetime_ref(&mut self, _: Span, lifetime: &'v Option<Lifetime>) {
-        self.record(lifetime);
-    }
-
     // for lifetimes as parameters of generics
-    fn visit_lifetime_ref(&mut self, lifetime: &'v Lifetime) {
+    fn visit_lifetime(&mut self, lifetime: &'v Lifetime) {
         self.record(&Some(*lifetime));
     }
 
-    // for lifetime bounds; the default impl calls visit_lifetime_ref
-    fn visit_lifetime_bound(&mut self, _: &'v Lifetime) { }
+    fn visit_ty(&mut self, ty: &'v Ty) {
+        if let TyRptr(None, _) = ty.node {
+            self.record(&None);
+        }
+        walk_ty(self, ty);
+    }
 }
 
 /// Are any lifetimes mentioned in the `where` clause? If yes, we don't try to

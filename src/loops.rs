@@ -6,6 +6,7 @@ use rustc::middle::ty;
 use rustc::middle::def::DefLocal;
 use consts::{constant_simple, Constant};
 use rustc::front::map::Node::{NodeBlock};
+use std::borrow::Cow;
 use std::collections::{HashSet,HashMap};
 use syntax::ast::Lit_::*;
 
@@ -43,8 +44,10 @@ impl LintPass for LoopsPass {
         lint_array!(NEEDLESS_RANGE_LOOP, EXPLICIT_ITER_LOOP, ITER_NEXT_LOOP,
                     WHILE_LET_LOOP, UNUSED_COLLECT, REVERSE_RANGE_LOOP, EXPLICIT_COUNTER_LOOP)
     }
+}
 
-    fn check_expr(&mut self, cx: &Context, expr: &Expr) {
+impl LateLintPass for LoopsPass {
+    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
         if let Some((pat, arg, body)) = recover_for_loop(expr) {
             // check for looping over a range and then indexing a sequence with it
             // -> the iteratee must be a range literal
@@ -106,19 +109,19 @@ impl LintPass for LoopsPass {
             if let ExprMethodCall(ref method, _, ref args) = arg.node {
                 // just the receiver, no arguments
                 if args.len() == 1 {
-                    let method_name = method.node.name;
+                    let method_name = method.node;
                     // check for looping over x.iter() or x.iter_mut(), could use &x or &mut x
-                    if method_name == "iter" || method_name == "iter_mut" {
+                    if method_name.as_str() == "iter" || method_name.as_str() == "iter_mut" {
                         if is_ref_iterable_type(cx, &args[0]) {
                             let object = snippet(cx, args[0].span, "_");
                             span_lint(cx, EXPLICIT_ITER_LOOP, expr.span, &format!(
                                 "it is more idiomatic to loop over `&{}{}` instead of `{}.{}()`",
-                                if method_name == "iter_mut" { "mut " } else { "" },
+                                if method_name.as_str() == "iter_mut" { "mut " } else { "" },
                                 object, object, method_name));
                         }
                     }
                     // check for looping over Iterator::next() which is not what you want
-                    else if method_name == "next" &&
+                    else if method_name.as_str() == "next" &&
                             match_trait_method(cx, arg, &["core", "iter", "Iterator"]) {
                         span_lint(cx, ITER_NEXT_LOOP, expr.span,
                                   "you are iterating over `Iterator::next()` which is an Option; \
@@ -157,10 +160,27 @@ impl LintPass for LoopsPass {
             }
         }
         // check for `loop { if let {} else break }` that could be `while let`
-        // (also matches explicit "match" instead of "if let")
+        // (also matches an explicit "match" instead of "if let")
+        // (even if the "match" or "if let" is used for declaration)
         if let ExprLoop(ref block, _) = expr.node {
+            // extract the first statement (if any) in a block
+            let inner_stmt = extract_expr_from_first_stmt(block);
             // extract a single expression
-            if let Some(inner) = extract_single_expr(block) {
+            let inner_expr = extract_first_expr(block);
+            let extracted = match inner_stmt {
+                Some(_) => inner_stmt,
+                None => inner_expr,
+            };
+
+            if let Some(inner) = extracted {
+                // collect remaining expressions below the match
+                let other_stuff = block.stmts
+                                  .iter()
+                                  .skip(1)
+                                  .map(|stmt| {
+                                      format!("{}", snippet(cx, stmt.span, ".."))
+                                  }).collect::<Vec<String>>();
+
                 if let ExprMatch(ref matchexpr, ref arms, ref source) = inner.node {
                     // ensure "if let" compatible match structure
                     match *source {
@@ -172,12 +192,19 @@ impl LintPass for LoopsPass {
                             is_break_expr(&arms[1].body)
                         {
                             if in_external_macro(cx, expr.span) { return; }
+                            let loop_body = match inner_stmt {
+                                // FIXME: should probably be an ellipsis
+                                // tabbing and newline is probably a bad idea, especially for large blocks
+                                Some(_) => Cow::Owned(format!("{{\n    {}\n}}", other_stuff.join("\n    "))),
+                                None => expr_block(cx, &arms[0].body,
+                                                   Some(other_stuff.join("\n    ")), ".."),
+                            };
                             span_help_and_lint(cx, WHILE_LET_LOOP, expr.span,
                                                "this loop could be written as a `while let` loop",
                                                &format!("try\nwhile let {} = {} {}",
                                                         snippet(cx, arms[0].pats[0].span, ".."),
                                                         snippet(cx, matchexpr.span, ".."),
-                                                        expr_block(cx, &arms[0].body, "..")));
+                                                        loop_body));
                         },
                         _ => ()
                     }
@@ -186,10 +213,10 @@ impl LintPass for LoopsPass {
         }
     }
 
-    fn check_stmt(&mut self, cx: &Context, stmt: &Stmt) {
+    fn check_stmt(&mut self, cx: &LateContext, stmt: &Stmt) {
         if let StmtSemi(ref expr, _) = stmt.node {
             if let ExprMethodCall(ref method, _, ref args) = expr.node {
-                if args.len() == 1 && method.node.name == "collect" &&
+                if args.len() == 1 && method.node.as_str() == "collect" &&
                         match_trait_method(cx, expr, &["core", "iter", "Iterator"]) {
                     span_lint(cx, UNUSED_COLLECT, expr.span, &format!(
                         "you are collect()ing an iterator and throwing away the result. \
@@ -225,7 +252,7 @@ fn recover_for_loop(expr: &Expr) -> Option<(&Pat, &Expr, &Expr)> {
 }
 
 struct VarVisitor<'v, 't: 'v> {
-    cx: &'v Context<'v, 't>, // context reference
+    cx: &'v LateContext<'v, 't>, // context reference
     var: Name,               // var name to look for as index
     indexed: HashSet<Name>,  // indexed variables
     nonindex: bool,          // has the var been used otherwise?
@@ -258,7 +285,7 @@ impl<'v, 't> Visitor<'v> for VarVisitor<'v, 't> {
 
 /// Return true if the type of expr is one that provides IntoIterator impls
 /// for &T and &mut T, such as Vec.
-fn is_ref_iterable_type(cx: &Context, e: &Expr) -> bool {
+fn is_ref_iterable_type(cx: &LateContext, e: &Expr) -> bool {
     // no walk_ptrs_ty: calling iter() on a reference can make sense because it
     // will allow further borrows afterwards
     let ty = cx.tcx.expr_ty(e);
@@ -274,23 +301,40 @@ fn is_ref_iterable_type(cx: &Context, e: &Expr) -> bool {
 }
 
 fn is_iterable_array(ty: ty::Ty) -> bool {
-    //IntoIterator is currently only implemented for array sizes <= 32 in rustc
+    // IntoIterator is currently only implemented for array sizes <= 32 in rustc
     match ty.sty {
         ty::TyArray(_, 0...32) => true,
         _ => false
     }
 }
 
-/// If block consists of a single expression (with or without semicolon), return it.
-fn extract_single_expr(block: &Block) -> Option<&Expr> {
-    match (&block.stmts.len(), &block.expr) {
-        (&1, &None) => match block.stmts[0].node {
-            StmtExpr(ref expr, _) |
-            StmtSemi(ref expr, _) => Some(expr),
+/// If a block begins with a statement (possibly a `let` binding) and has an expression, return it.
+fn extract_expr_from_first_stmt(block: &Block) -> Option<&Expr> {
+    match block.expr {
+        Some(_) => None,
+        None if !block.stmts.is_empty() => match block.stmts[0].node {
+            StmtDecl(ref decl, _) => match decl.node {
+                DeclLocal(ref local) => match local.init {
+                    Some(ref expr) => Some(expr),
+                    None => None,
+                },
+                _ => None,
+            },
             _ => None,
         },
-        (&0, &Some(ref expr)) => Some(expr),
-        _ => None
+        _ => None,
+    }
+}
+
+/// If a block begins with an expression (with or without semicolon), return it.
+fn extract_first_expr(block: &Block) -> Option<&Expr> {
+    match block.expr {
+        Some(ref expr) => Some(expr),
+        None if !block.stmts.is_empty() => match block.stmts[0].node {
+            StmtExpr(ref expr, _) | StmtSemi(ref expr, _) => Some(expr),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -298,7 +342,8 @@ fn extract_single_expr(block: &Block) -> Option<&Expr> {
 fn is_break_expr(expr: &Expr) -> bool {
     match expr.node {
         ExprBreak(None) => true,
-        ExprBlock(ref b) => match extract_single_expr(b) {
+        // there won't be a `let <pat> = break` and so we can safely ignore the StmtDecl case
+        ExprBlock(ref b) => match extract_first_expr(b) {
             Some(ref subexpr) => is_break_expr(subexpr),
             None => false,
         },
@@ -320,7 +365,7 @@ enum VarState {
 
 // Scan a for loop for variables that are incremented exactly once.
 struct IncrementVisitor<'v, 't: 'v> {
-    cx: &'v Context<'v, 't>,      // context reference
+    cx: &'v LateContext<'v, 't>,      // context reference
     states: HashMap<NodeId, VarState>,  // incremented variables
     depth: u32,                         // depth of conditional expressions
     done: bool
@@ -376,7 +421,7 @@ impl<'v, 't> Visitor<'v> for IncrementVisitor<'v, 't> {
 
 // Check whether a variable is initialized to zero at the start of a loop.
 struct InitializeVisitor<'v, 't: 'v> {
-    cx: &'v Context<'v, 't>, // context reference
+    cx: &'v LateContext<'v, 't>, // context reference
     end_expr: &'v Expr,      // the for loop. Stop scanning here.
     var_id: NodeId,
     state: VarState,
@@ -454,9 +499,9 @@ impl<'v, 't> Visitor<'v> for InitializeVisitor<'v, 't> {
     }
 }
 
-fn var_def_id(cx: &Context, expr: &Expr) -> Option<NodeId> {
+fn var_def_id(cx: &LateContext, expr: &Expr) -> Option<NodeId> {
     if let Some(path_res) = cx.tcx.def_map.borrow().get(&expr.id) {
-        if let DefLocal(node_id) = path_res.base_def {
+        if let DefLocal(_, node_id) = path_res.base_def {
             return Some(node_id)
         }
     }

@@ -1,5 +1,6 @@
 use rustc::lint::*;
 use rustc_front::hir::*;
+use syntax::ast::Name;
 use syntax::ptr::P;
 use syntax::codemap::{Span, Spanned};
 use rustc::middle::def_id::DefId;
@@ -24,8 +25,10 @@ impl LintPass for LenZero {
     fn get_lints(&self) -> LintArray {
         lint_array!(LEN_ZERO, LEN_WITHOUT_IS_EMPTY)
     }
+}
 
-    fn check_item(&mut self, cx: &Context, item: &Item) {
+impl LateLintPass for LenZero {
+    fn check_item(&mut self, cx: &LateContext, item: &Item) {
         match item.node {
             ItemTrait(_, _, _, ref trait_items) =>
                 check_trait_items(cx, item, trait_items),
@@ -35,7 +38,7 @@ impl LintPass for LenZero {
         }
     }
 
-    fn check_expr(&mut self, cx: &Context, expr: &Expr) {
+    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
         if let ExprBinary(Spanned{node: cmp, ..}, ref left, ref right) =
                 expr.node {
             match cmp {
@@ -47,9 +50,9 @@ impl LintPass for LenZero {
     }
 }
 
-fn check_trait_items(cx: &Context, item: &Item, trait_items: &[P<TraitItem>]) {
+fn check_trait_items(cx: &LateContext, item: &Item, trait_items: &[P<TraitItem>]) {
     fn is_named_self(item: &TraitItem, name: &str) -> bool {
-        item.ident.name == name && if let MethodTraitItem(ref sig, _) =
+        item.name.as_str() == name && if let MethodTraitItem(ref sig, _) =
             item.node { is_self_sig(sig) } else { false }
     }
 
@@ -60,15 +63,15 @@ fn check_trait_items(cx: &Context, item: &Item, trait_items: &[P<TraitItem>]) {
                 span_lint(cx, LEN_WITHOUT_IS_EMPTY, i.span,
                           &format!("trait `{}` has a `.len(_: &Self)` method, but no \
                                     `.is_empty(_: &Self)` method. Consider adding one",
-                                   item.ident.name));
+                                   item.name));
             }
         };
     }
 }
 
-fn check_impl_items(cx: &Context, item: &Item, impl_items: &[P<ImplItem>]) {
+fn check_impl_items(cx: &LateContext, item: &Item, impl_items: &[P<ImplItem>]) {
     fn is_named_self(item: &ImplItem, name: &str) -> bool {
-        item.ident.name == name && if let MethodImplItem(ref sig, _) =
+        item.name.as_str() == name && if let MethodImplItem(ref sig, _) =
             item.node { is_self_sig(sig) } else { false }
     }
 
@@ -80,7 +83,7 @@ fn check_impl_items(cx: &Context, item: &Item, impl_items: &[P<ImplItem>]) {
                           Span{ lo: s.lo, hi: s.lo, expn_id: s.expn_id },
                           &format!("item `{}` has a `.len(_: &Self)` method, but no \
                                     `.is_empty(_: &Self)` method. Consider adding one",
-                                   item.ident.name));
+                                   item.name));
                 return;
             }
         }
@@ -92,24 +95,24 @@ fn is_self_sig(sig: &MethodSig) -> bool {
         false } else { sig.decl.inputs.len() == 1 }
 }
 
-fn check_cmp(cx: &Context, span: Span, left: &Expr, right: &Expr, op: &str) {    
-    // check if we are in an is_empty() method 
+fn check_cmp(cx: &LateContext, span: Span, left: &Expr, right: &Expr, op: &str) {
+    // check if we are in an is_empty() method
     if let Some(name) = get_item_name(cx, left) {
-        if name == "is_empty" { return; }
+        if name.as_str() == "is_empty" { return; }
     }
     match (&left.node, &right.node) {
         (&ExprLit(ref lit), &ExprMethodCall(ref method, _, ref args)) =>
-            check_len_zero(cx, span, method, args, lit, op),
+            check_len_zero(cx, span, &method.node, args, lit, op),
         (&ExprMethodCall(ref method, _, ref args), &ExprLit(ref lit)) =>
-            check_len_zero(cx, span, method, args, lit, op),
+            check_len_zero(cx, span, &method.node, args, lit, op),
         _ => ()
     }
 }
 
-fn check_len_zero(cx: &Context, span: Span, method: &SpannedIdent,
+fn check_len_zero(cx: &LateContext, span: Span, name: &Name,
                   args: &[P<Expr>], lit: &Lit, op: &str) {
     if let Spanned{node: LitInt(0, _), ..} = *lit {
-        if method.node.name == "len" && args.len() == 1 &&
+        if name.as_str() == "len" && args.len() == 1 &&
             has_is_empty(cx, &args[0]) {
                 span_lint(cx, LEN_ZERO, span, &format!(
                     "consider replacing the len comparison with `{}{}.is_empty()`",
@@ -119,20 +122,20 @@ fn check_len_zero(cx: &Context, span: Span, method: &SpannedIdent,
 }
 
 /// check if this type has an is_empty method
-fn has_is_empty(cx: &Context, expr: &Expr) -> bool {
+fn has_is_empty(cx: &LateContext, expr: &Expr) -> bool {
     /// get a ImplOrTraitItem and return true if it matches is_empty(self)
-    fn is_is_empty(cx: &Context, id: &ImplOrTraitItemId) -> bool {
+    fn is_is_empty(cx: &LateContext, id: &ImplOrTraitItemId) -> bool {
         if let &MethodTraitItemId(def_id) = id {
             if let ty::MethodTraitItem(ref method) =
                 cx.tcx.impl_or_trait_item(def_id) {
-                    method.name == "is_empty"
+                    method.name.as_str() == "is_empty"
                         && method.fty.sig.skip_binder().inputs.len() == 1
                 } else { false }
         } else { false }
     }
 
     /// check the inherent impl's items for an is_empty(self) method
-    fn has_is_empty_impl(cx: &Context, id: &DefId) -> bool {
+    fn has_is_empty_impl(cx: &LateContext, id: &DefId) -> bool {
         let impl_items = cx.tcx.impl_items.borrow();
         cx.tcx.inherent_impls.borrow().get(id).map_or(false,
             |ids| ids.iter().any(|iid| impl_items.get(iid).map_or(false,

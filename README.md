@@ -1,15 +1,15 @@
 #rust-clippy
 [![Build Status](https://travis-ci.org/Manishearth/rust-clippy.svg?branch=master)](https://travis-ci.org/Manishearth/rust-clippy)
 
-A collection of lints that give helpful tips to newbies and catch oversights.
+A collection of lints to catch common mistakes and improve your Rust code.
 
 [Jump to usage instructions](#usage)
 
 ##Lints
-There are 58 lints included in this crate:
+There are 59 lints included in this crate:
 
 name                                                                                                   | default | meaning
--------------------------------------------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 [approx_constant](https://github.com/Manishearth/rust-clippy/wiki#approx_constant)                     | warn    | the approximate of a known float constant (in `std::f64::consts` or `std::f32::consts`) is found; suggests to use the constant
 [bad_bit_mask](https://github.com/Manishearth/rust-clippy/wiki#bad_bit_mask)                           | warn    | expressions of the form `_ & mask == select` that will only ever return `true` or `false` (because in the example `select` containing bits that `mask` doesn't have)
 [box_vec](https://github.com/Manishearth/rust-clippy/wiki#box_vec)                                     | warn    | usage of `Box<Vec<T>>`, vector elements are already on the heap
@@ -31,9 +31,9 @@ name                                                                            
 [iter_next_loop](https://github.com/Manishearth/rust-clippy/wiki#iter_next_loop)                       | warn    | for-looping over `_.next()` which is probably not intended
 [len_without_is_empty](https://github.com/Manishearth/rust-clippy/wiki#len_without_is_empty)           | warn    | traits and impls that have `.len()` but not `.is_empty()`
 [len_zero](https://github.com/Manishearth/rust-clippy/wiki#len_zero)                                   | warn    | checking `.len() == 0` or `.len() > 0` (or similar) when `.is_empty()` could be used instead
-[let_and_return](https://github.com/Manishearth/rust-clippy/wiki#let_and_return)                       | warn    | creating a let-binding and then immediately returning it like `let x = expr; x` at the end of a function
+[let_and_return](https://github.com/Manishearth/rust-clippy/wiki#let_and_return)                       | warn    | creating a let-binding and then immediately returning it like `let x = expr; x` at the end of a block
 [let_unit_value](https://github.com/Manishearth/rust-clippy/wiki#let_unit_value)                       | warn    | creating a let binding to a value of unit type, which usually can't be used afterwards
-[linkedlist](https://github.com/Manishearth/rust-clippy/wiki#linkedlist)                               | warn    | usage of LinkedList, usually a vector is faster, or a more specialized data structure like a RingBuf
+[linkedlist](https://github.com/Manishearth/rust-clippy/wiki#linkedlist)                               | warn    | usage of LinkedList, usually a vector is faster, or a more specialized data structure like a VecDeque
 [match_ref_pats](https://github.com/Manishearth/rust-clippy/wiki#match_ref_pats)                       | warn    | a match has all arms prefixed with `&`; the match expression can be dereferenced instead
 [min_max](https://github.com/Manishearth/rust-clippy/wiki#min_max)                                     | warn    | `min(_, max(_, _))` (or vice versa) with bounds clamping the result to a constant
 [modulo_one](https://github.com/Manishearth/rust-clippy/wiki#modulo_one)                               | warn    | taking a number modulo 1, which always returns 0
@@ -60,10 +60,11 @@ name                                                                            
 [string_add](https://github.com/Manishearth/rust-clippy/wiki#string_add)                               | allow   | using `x + ..` where x is a `String`; suggests using `push_str()` instead
 [string_add_assign](https://github.com/Manishearth/rust-clippy/wiki#string_add_assign)                 | allow   | using `x = x + ..` where x is a `String`; suggests using `push_str()` instead
 [string_to_string](https://github.com/Manishearth/rust-clippy/wiki#string_to_string)                   | warn    | calling `String.to_string()` which is a no-op
-[toplevel_ref_arg](https://github.com/Manishearth/rust-clippy/wiki#toplevel_ref_arg)                   | warn    | a function argument is declared `ref` (i.e. `fn foo(ref x: u8)`, but not `fn foo((ref x, ref y): (u8, u8))`)
+[toplevel_ref_arg](https://github.com/Manishearth/rust-clippy/wiki#toplevel_ref_arg)                   | warn    | An entire binding was declared as `ref`, in a function argument (`fn foo(ref x: Bar)`), or a `let` statement (`let ref x = foo()`). In such cases, it is preferred to take references with `&`.
 [type_complexity](https://github.com/Manishearth/rust-clippy/wiki#type_complexity)                     | warn    | usage of very complex types; recommends factoring out parts into `type` definitions
 [unicode_not_nfc](https://github.com/Manishearth/rust-clippy/wiki#unicode_not_nfc)                     | allow   | using a unicode literal not in NFC normal form (see http://www.unicode.org/reports/tr15/ for further information)
 [unit_cmp](https://github.com/Manishearth/rust-clippy/wiki#unit_cmp)                                   | warn    | comparing unit values (which is always `true` or `false`, respectively)
+[unnecessary_mut_passed](https://github.com/Manishearth/rust-clippy/wiki#unnecessary_mut_passed)       | warn    | an argument is passed as a mutable reference although the function/method only demands an immutable reference
 [unused_collect](https://github.com/Manishearth/rust-clippy/wiki#unused_collect)                       | warn    | `collect()`ing an iterator without using the result; this is usually better written as a for loop
 [while_let_loop](https://github.com/Manishearth/rust-clippy/wiki#while_let_loop)                       | warn    | `loop { if let { ... } else break }` can be written as a `while let` loop
 [wrong_pub_self_convention](https://github.com/Manishearth/rust-clippy/wiki#wrong_pub_self_convention) | allow   | defining a public method named with an established prefix (like "into_") that takes `self` with the wrong convention

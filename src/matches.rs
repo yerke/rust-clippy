@@ -17,8 +17,10 @@ impl LintPass for MatchPass {
     fn get_lints(&self) -> LintArray {
         lint_array!(SINGLE_MATCH, MATCH_REF_PATS)
     }
+}
 
-    fn check_expr(&mut self, cx: &Context, expr: &Expr) {
+impl LateLintPass for MatchPass {
+    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
         if let ExprMatch(ref ex, ref arms, MatchSource::Normal) = expr.node {
             // check preconditions for SINGLE_MATCH
                 // only two arms
@@ -41,7 +43,7 @@ impl LintPass for MatchPass {
                                    &format!("try\nif let {} = {} {}",
                                             snippet(cx, arms[0].pats[0].span, ".."),
                                             snippet(cx, ex.span, ".."),
-                                            expr_block(cx, &arms[0].body, "..")));
+                                            expr_block(cx, &arms[0].body, None, "..")));
             }
 
             // check preconditions for MATCH_REF_PATS

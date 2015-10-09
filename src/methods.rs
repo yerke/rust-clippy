@@ -36,11 +36,13 @@ impl LintPass for MethodsPass {
         lint_array!(OPTION_UNWRAP_USED, RESULT_UNWRAP_USED, STR_TO_STRING, STRING_TO_STRING,
                     SHOULD_IMPLEMENT_TRAIT, WRONG_SELF_CONVENTION)
     }
+}
 
-    fn check_expr(&mut self, cx: &Context, expr: &Expr) {
-        if let ExprMethodCall(ref ident, _, ref args) = expr.node {
+impl LateLintPass for MethodsPass {
+    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+        if let ExprMethodCall(ref name, _, ref args) = expr.node {
             let (obj_ty, ptr_depth) = walk_ptrs_ty_depth(cx.tcx.expr_ty(&args[0]));
-            if ident.node.name == "unwrap" {
+            if name.node.as_str() == "unwrap" {
                 if match_type(cx, obj_ty, &OPTION_PATH) {
                     span_lint(cx, OPTION_UNWRAP_USED, expr.span,
                               "used unwrap() on an Option value. If you don't want \
@@ -52,7 +54,7 @@ impl LintPass for MethodsPass {
                                of Err values is preferred");
                 }
             }
-            else if ident.node.name == "to_string" {
+            else if name.node.as_str() == "to_string" {
                 if obj_ty.sty == ty::TyStr {
                     let mut arg_str = snippet(cx, args[0].span, "_");
                     if ptr_depth > 1 {
@@ -71,16 +73,16 @@ impl LintPass for MethodsPass {
         }
     }
 
-    fn check_item(&mut self, cx: &Context, item: &Item) {
+    fn check_item(&mut self, cx: &LateContext, item: &Item) {
         if let ItemImpl(_, _, _, None, ref ty, ref items) = item.node {
             for implitem in items {
-                let name = implitem.ident.name;
+                let name = implitem.name;
                 if let MethodImplItem(ref sig, _) = implitem.node {
                     // check missing trait implementations
                     for &(method_name, n_args, self_kind, out_type, trait_name) in &TRAIT_METHODS {
                         if_let_chain! {
                             [
-                                name == method_name,
+                                name.as_str() == method_name,
                                 sig.decl.inputs.len() == n_args,
                                 out_type.matches(&sig.decl.output),
                                 self_kind.matches(&sig.explicit_self.node, false)
@@ -122,7 +124,7 @@ const CONVENTIONS: [(&'static str, &'static [SelfKind]); 5] = [
 ];
 
 const TRAIT_METHODS: [(&'static str, usize, SelfKind, OutType, &'static str); 30] = [
-    ("add",        2, ValueSelf,  AnyType,  "std::ops::Add`"),
+    ("add",        2, ValueSelf,  AnyType,  "std::ops::Add"),
     ("sub",        2, ValueSelf,  AnyType,  "std::ops::Sub"),
     ("mul",        2, ValueSelf,  AnyType,  "std::ops::Mul"),
     ("div",        2, ValueSelf,  AnyType,  "std::ops::Div"),
@@ -229,7 +231,7 @@ fn is_bool(ty: &Ty) -> bool {
     false
 }
 
-fn is_copy(cx: &Context, ast_ty: &Ty, item: &Item) -> bool {
+fn is_copy(cx: &LateContext, ast_ty: &Ty, item: &Item) -> bool {
     match cx.tcx.ast_ty_to_ty_cache.borrow().get(&ast_ty.id) {
         None => false,
         Some(ty) => {

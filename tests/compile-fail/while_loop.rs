@@ -1,16 +1,11 @@
 #![feature(plugin)]
 #![plugin(clippy)]
 
-#[deny(while_let_loop)]
+#![deny(while_let_loop)]
+#![allow(dead_code, unused)]
+
 fn main() {
     let y = Some(true);
-    loop { //~ERROR
-        if let Some(_x) = y {
-            let _v = 1;
-        } else {
-            break;
-        }
-    }
     loop { //~ERROR
         if let Some(_x) = y {
             let _v = 1;
@@ -30,12 +25,13 @@ fn main() {
             None => break
         };
     }
-    loop { // no error, match is not the only statement
-        match y {
-            Some(_x) => true,
+    loop { //~ERROR
+        let x = match y {
+            Some(x) => x,
             None => break
         };
-        let _x = 1;
+        let _x = x;
+        let _str = "foo";
     }
     loop { // no error, else branch does something other than break
         match y {
@@ -48,5 +44,20 @@ fn main() {
     }
     while let Some(x) = y { // no error, obviously
         println!("{}", x);
+    }
+}
+
+// regression test (#360)
+// this should not panic
+// it's okay if further iterations of the lint
+// cause this function to trigger it
+fn no_panic<T>(slice: &[T]) {
+    let mut iter = slice.iter();
+    loop {
+        let _ = match iter.next() {
+            Some(ele) => ele,
+            None => break
+        };
+        loop {}
     }
 }
