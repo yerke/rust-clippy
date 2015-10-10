@@ -31,11 +31,11 @@ pub struct CowPass;
 
 pub struct CowVisitor<'v, 't: 'v> {
     map: CowMap,
-    cx: &'v Context<'v, 't>,
+    cx: &'v LateContext<'v, 't>,
 }
 
 impl<'v, 't: 'v> CowVisitor<'v, 't> {
-    fn new(cx: &'v Context<'v, 't>) -> CowVisitor<'v, 't> {
+    fn new(cx: &'v LateContext<'v, 't>) -> CowVisitor<'v, 't> {
         CowVisitor{ map: NodeMap(), cx: cx }
     }
 
@@ -53,7 +53,7 @@ impl<'v, 't> Visitor<'v> for CowVisitor<'v, 't> {
         let tcx = &self.cx.tcx;
         let param_env = Some(ty::ParameterEnvironment::for_item(tcx, id));
         let infcx = infer::new_infer_ctxt(tcx, &tcx.tables, param_env, false);
-        let vis = euv::ExprUseVisitor::new(self as &mut euv::Delegate<'t>, &infcx);
+        let mut vis = euv::ExprUseVisitor::new(self as &mut euv::Delegate<'t>, &infcx);
         vis.walk_fn(fd, b);
     }
 
@@ -65,7 +65,7 @@ impl<'v, 't> Visitor<'v> for CowVisitor<'v, 't> {
                 for variant in &def.variants {
                     match variant.node.kind {
                         TupleVariantKind(ref args) => {
-                            if is_public && variant.node.vis == Public {
+                            if is_public {
                                 for arg in args {
                                     if is_string_type(&arg.ty) {
                                         let mut map = &mut self.map;
@@ -124,21 +124,21 @@ fn check_struct(cv: &mut CowVisitor, def: &StructDef, is_public: bool) {
 //TODO: What do we need to look at?
 impl<'v, 't: 'v> euv::Delegate<'t> for CowVisitor<'v, 't> {
     fn consume(&mut self, consume_id: NodeId, consume_span: Span,
-            cmt: cmt<'v>, mode: euv::ConsumeMode) {
+            cmt: cmt<'t>, mode: euv::ConsumeMode) {
         //TODO
     }
 
-    fn matched_pat(&mut self, matched_pat: &Pat, cmt: cmt<'v>,
+    fn matched_pat(&mut self, matched_pat: &Pat, cmt: cmt<'t>,
             mode: euv::MatchMode) {
         //TODO
     }
 
-    fn consume_pat(&mut self, consume_pat: &Pat, cmt: cmt<'v>,
+    fn consume_pat(&mut self, consume_pat: &Pat, cmt: cmt<'t>,
             mode: euv::ConsumeMode) {
         //TODO
     }
 
-    fn borrow(&mut self, borrow_id: NodeId, borrow_span: Span, cmt: cmt<'v>,
+    fn borrow(&mut self, borrow_id: NodeId, borrow_span: Span, cmt: cmt<'t>,
             loan_region: ty::Region, bk: ty::BorrowKind, loan_cause: euv::LoanCause) {
         //TODO
     }
@@ -147,7 +147,7 @@ impl<'v, 't: 'v> euv::Delegate<'t> for CowVisitor<'v, 't> {
         //TODO
     }
     fn mutate(&mut self, assignment_id: NodeId, assignment_span: Span,
-            assignee_cmt: cmt<'v>, mode: euv::MutateMode) {
+            assignee_cmt: cmt<'t>, mode: euv::MutateMode) {
         //TODO
     }
 }
@@ -156,8 +156,10 @@ impl LintPass for CowPass {
     fn get_lints(&self) -> LintArray {
         lint_array!(GOT_MILK)
     }
+}
 
-    fn check_crate(&mut self, cx: &Context, krate: &Crate) {
+impl LateLintPass for CowPass {
+    fn check_crate(&mut self, cx: &LateContext, krate: &Crate) {
         let mut cv = CowVisitor::new(cx);
         cv.walk_crate(krate);
         //for (node_id, entry) in &cv.map {
