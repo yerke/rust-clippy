@@ -1,11 +1,12 @@
 //! This lint checks for `String` typed values (either in variables or fields)
 //! that can benefit from using `std::borrow::Cow` instead.
 
-use syntax::ast::{CRATE_NODE_ID, NodeId};
+use syntax::ast::{NodeId};
 use syntax::codemap::Span;
 use rustc::lint::*;
 use rustc_front::visit::{FnKind, Visitor, walk_crate, walk_item};
 use rustc_front::hir::*;
+use rustc::front::map::Node::NodeExpr;
 use rustc::middle::mem_categorization::{cmt, categorization};
 use rustc::middle::expr_use_visitor as euv;
 use rustc::middle::{infer, ty};
@@ -13,9 +14,10 @@ use rustc::util::nodemap::NodeMap;
 
 use utils::{match_path, STRING_PATH};
 
-declare_lint!{ pub GOT_MILK, Warn,
-               "look for `String`s that are only instantiated from \
-               `&'static str`s or non-stringy sources, suggest Cow" }
+declare_lint!{ pub GOT_MILK, Allow,
+               "look for `T`s instantiated from `&'static` refefences using \
+                `.to_owned()` (or similar), suggest `Cow<&static, T>` or even \
+                `&static T`" }
 
 /// a growable sequence of &Expr references
 pub type ExprRefs = Vec<NodeId>;
@@ -41,6 +43,18 @@ impl<'v, 't: 'v> CowVisitor<'v, 't> {
 
     fn walk_crate(&mut self, krate: &'v Crate) {
         walk_crate(self, &krate);
+    }
+    
+    fn span_lint(&self, span: Span, message: &str) {
+        self.cx.span_lint(GOT_MILK, span, message);
+    }
+    
+    fn find_expr(&self, node_id: NodeId) -> Option<&Expr> {
+        if let Some(NodeExpr(ref e)) = self.cx.tcx.map.find(node_id) {
+            Some(e)
+        } else {
+            None
+        }
     }
 }
 
@@ -125,30 +139,44 @@ fn check_struct(cv: &mut CowVisitor, def: &StructDef, is_public: bool) {
 impl<'v, 't: 'v> euv::Delegate<'t> for CowVisitor<'v, 't> {
     fn consume(&mut self, consume_id: NodeId, consume_span: Span,
             cmt: cmt<'t>, mode: euv::ConsumeMode) {
-        //TODO
+        if let Some(ref e) = self.find_expr(consume_id) {
+            if let ExprAddrOf(_, _) = e.node { return; } // we get borrow la
+            self.span_lint(consume_span, &format!("consume{:?} {:?} {:?}", mode,
+                e, cmt));
+        }
     }
 
     fn matched_pat(&mut self, matched_pat: &Pat, cmt: cmt<'t>,
             mode: euv::MatchMode) {
         //TODO
+        self.span_lint(matched_pat.span, &format!("matched_pat{:?} {:?} {:?}", 
+            mode, matched_pat, cmt));
     }
 
     fn consume_pat(&mut self, consume_pat: &Pat, cmt: cmt<'t>,
             mode: euv::ConsumeMode) {
         //TODO
+        self.span_lint(consume_pat.span, &format!("consume_pat{:?} {:?} {:?}", 
+            mode, consume_pat, cmt));
     }
 
     fn borrow(&mut self, borrow_id: NodeId, borrow_span: Span, cmt: cmt<'t>,
             loan_region: ty::Region, bk: ty::BorrowKind, loan_cause: euv::LoanCause) {
         //TODO
+        self.span_lint(borrow_span, &format!("borrow{:?} {:?} {:?} {:?}", 
+            loan_cause, cmt, bk, loan_region));        
     }
 
     fn decl_without_init(&mut self, id: NodeId, span: Span) {
         //TODO
+        self.span_lint(span, "decl_without_init");
     }
+    
     fn mutate(&mut self, assignment_id: NodeId, assignment_span: Span,
             assignee_cmt: cmt<'t>, mode: euv::MutateMode) {
         //TODO
+        self.span_lint(assignment_span, &format!("mutate{:?} {:?}", 
+            mode, assignee_cmt));        
     }
 }
 

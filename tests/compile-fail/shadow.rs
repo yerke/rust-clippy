@@ -2,7 +2,7 @@
 #![plugin(clippy)]
 
 #![allow(unused_parens, unused_variables)]
-#![deny(clippy, clippy_pedantic)]
+#![deny(clippy, shadow_reuse, shadow_same, shadow_unrelated)]
 
 fn id<T>(x: T) -> T { x }
 
