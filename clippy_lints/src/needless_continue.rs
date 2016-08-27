@@ -116,34 +116,29 @@ impl EarlyLintPass for NeedlessContinue {
     }
 }
 
-/// Given an Expr, returns true if either of the following is true
+/// Given an expression, returns true if either of the following is true
 ///
-/// - The Expr is a `continue` node.
-/// - The Expr node is a block with the first statement being a `continue`.
+/// - The expression is a `continue` node.
+/// - The expression node is a block with the first statement being a `continue`.
 ///
 fn needless_continue_in_else(else_expr: &ast::Expr) -> bool {
-    let mut found = false;
     match else_expr.node {
-        ast::ExprKind::Block(ref else_block) => {
-            found = is_first_block_stmt_continue(else_block);
-        },
-        ast::ExprKind::Continue(_) => { found = true },
-        _ => { },
-    };
-    found
+        ast::ExprKind::Block(ref else_block) => is_first_block_stmt_continue(else_block),
+        ast::ExprKind::Continue(_) => true,
+        _ => false,
+    }
 }
 
 fn is_first_block_stmt_continue(block: &ast::Block) -> bool {
-    let mut ret = false;
-    block.stmts.get(0).map(|stmt| {
-        if_let_chain! {[
-            let ast::StmtKind::Semi(ref e) = stmt.node,
-            let ast::ExprKind::Continue(_) = e.node,
-        ], {
-            ret = true;
-        }}
-    });
-    ret
+    if_let_chain! {[
+        let Some(stmt) = block.stmts.get(0),
+        let ast::StmtKind::Semi(ref e) = stmt.node,
+        let ast::ExprKind::Continue(_) = e.node,
+    ], {
+        return true;
+    }}
+
+    false
 }
 
 /// If `expr` is a loop expression (while/while let/for/loop), calls `func` with
@@ -158,13 +153,13 @@ fn with_loop_block<F>(expr: &ast::Expr, mut func: F) where F: FnMut(&ast::Block)
     }
 }
 
-/// If `stmt` is an if expression node with an else branch, calls func with the
+/// If `stmt` is an if expression node with an `else` branch, calls func with the
 /// following:
 ///
-/// - The if Expr,
-/// - The if condition Expr,
-/// - The then block of this if Expr, and
-/// - The else expr.
+/// - The `if` expression itself,
+/// - The `if` condition expression,
+/// - The `then` block, and
+/// - The `else` expression.
 ///
 fn with_if_expr<F>(stmt: &ast::Stmt, mut func: F)
         where F: FnMut(&ast::Expr, &ast::Expr, &ast::Block, &ast::Expr) {
@@ -187,15 +182,19 @@ enum LintType {
 
 /// Data we pass around for construction of help messages.
 struct LintData<'a> {
-    if_expr:     &'a ast::Expr,    // The `if` expr encountered in the above loop.
-    if_cond:     &'a ast::Expr,    // The condition expression for the above `if`.
-    if_block:    &'a ast::Block,   // The `then` block of the `if` statement.
-    else_expr:   &'a ast::Expr,    /* The `else` block of the `if` statement.
-                                      Note that we only work with `if` exprs that
-                                      have an `else` branch. */
-    stmt_idx:    usize,            /* The 0-based index of the `if` statement in
-                                      the containing loop block. */
-    block_stmts: &'a [ast::Stmt],  // The statements of the loop block.
+    /// The `if` expression encountered in the above loop.
+    if_expr: &'a ast::Expr,
+    /// The condition expression for the above `if`.
+    if_cond: &'a ast::Expr,
+    /// The `then` block of the `if` statement.
+    if_block: &'a ast::Block,
+    /// The `else` block of the `if` statement.
+    /// Note that we only work with `if` exprs that have an `else` branch.
+    else_expr: &'a ast::Expr,
+    /// The 0-based index of the `if` statement in the containing loop block.
+    stmt_idx: usize,
+    /// The statements of the loop block.
+    block_stmts: &'a [ast::Stmt],
 }
 
 const MSG_REDUNDANT_ELSE_BLOCK: &'static str = "This else block is redundant.\n";
@@ -235,7 +234,7 @@ fn emit_warning<'a>(ctx: &EarlyContext,
 fn suggestion_snippet_for_continue_inside_if<'a>(ctx: &EarlyContext,
                                                 data: &'a LintData,
                                                 header: &str) -> String {
-    let cond_code = &snippet(ctx, data.if_cond.span, "..").into_owned();
+    let cond_code = snippet(ctx, data.if_cond.span, "..");
 
     let if_code   = format!("if {} {{\n    continue;\n}}\n", cond_code);
                                    /*  ^^^^--- Four spaces of indentation. */
@@ -255,7 +254,7 @@ fn suggestion_snippet_for_continue_inside_else<'a>(ctx: &EarlyContext,
                                                    data: &'a LintData,
                                                    header: &str) -> String
 {
-    let cond_code = &snippet(ctx, data.if_cond.span, "..").into_owned();
+    let cond_code = snippet(ctx, data.if_cond.span, "..");
     let mut if_code   = format!("if {} {{\n", cond_code);
 
     // Region B
