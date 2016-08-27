@@ -33,7 +33,6 @@ use syntax::ast;
 use syntax::codemap::{original_sp,DUMMY_SP};
 
 use utils::{in_macro, span_help_and_lint, snippet_block, snippet};
-use self::LintType::*;
 
 /// **What it does:** The lint checks for `if`-statements appearing in loops
 /// that contain a `continue` statement in either their main blocks or their
@@ -219,12 +218,12 @@ fn emit_warning<'a>(ctx: &EarlyContext,
     // message is the warning message.
     // expr    is the expression which the lint warning message refers to.
     let (snip, message, expr) = match typ {
-        ContinueInsideElseBlock => {
+        LintType::ContinueInsideElseBlock => {
             (suggestion_snippet_for_continue_inside_else(ctx, data, header),
              MSG_REDUNDANT_ELSE_BLOCK,
              data.else_expr)
         },
-        ContinueInsideThenBlock => {
+        LintType::ContinueInsideThenBlock => {
             (suggestion_snippet_for_continue_inside_if(ctx, data, header),
              MSG_ELSE_BLOCK_NOT_NEEDED,
              data.if_expr)
@@ -263,7 +262,7 @@ fn suggestion_snippet_for_continue_inside_else<'a>(ctx: &EarlyContext,
     let block_code = &snippet(ctx, data.if_block.span, "..").into_owned();
     let block_code = erode_block(block_code);
     let block_code = trim_indent(&block_code, false);
-    let block_code = left_pad_lines_with_spaces(&block_code, 4usize);
+    let block_code = left_pad_lines_with_spaces(&block_code, 4_usize);
 
     if_code.push_str(&block_code);
 
@@ -300,9 +299,9 @@ fn check_and_warn<'a>(ctx: &EarlyContext, expr: &'a ast::Expr) {
                     block_stmts: &loop_block.stmts,
                 };
                 if needless_continue_in_else(else_expr) {
-                    emit_warning(ctx, data, DROP_ELSE_BLOCK_AND_MERGE_MSG, ContinueInsideElseBlock);
+                    emit_warning(ctx, data, DROP_ELSE_BLOCK_AND_MERGE_MSG, LintType::ContinueInsideElseBlock);
                 } else if is_first_block_stmt_continue(then_block) {
-                    emit_warning(ctx, data, DROP_ELSE_BLOCK_MSG, ContinueInsideThenBlock);
+                    emit_warning(ctx, data, DROP_ELSE_BLOCK_MSG, LintType::ContinueInsideThenBlock);
                 }
             });
         }
@@ -361,7 +360,7 @@ fn indent_level(s: &str) -> usize {
     s.chars()
      .enumerate()
      .find(|&(_, c)| !c.is_whitespace())
-     .map_or(0usize, |(i, _)| i)
+     .map_or(0_usize, |(i, _)| i)
 }
 
 /// Trims indentation from a snippet such that the line with the minimum
@@ -372,7 +371,7 @@ fn trim_indent(s: &str, skip_first_line: bool) -> String {
                             .skip(skip_first_line as usize)
                             .map(indent_level)
                             .min()
-                            .unwrap_or(0usize);
+                            .unwrap_or(0_usize);
     let ret = s.lines().map(|line| {
         if is_null(line) {
             String::from(line)
@@ -421,14 +420,14 @@ fn align_two_snippets(s: &str, t: &str) -> String {
                          .rev()
                          .skip_while(|line| line.is_empty() || is_all_whitespace(line))
                          .next()
-                         .map_or(0usize, indent_level);
+                         .map_or(0_usize, indent_level);
 
     // We want to align the first nonempty, non-all-whitespace line of t to
     // have the same indent level as target_ilevel
     let level = t.lines()
                  .skip_while(|line| line.is_empty() || is_all_whitespace(line))
                  .next()
-                 .map_or(0usize, indent_level);
+                 .map_or(0_usize, indent_level);
 
     let add_or_not_remove = target_ilevel > level; /* when true, we add spaces,
                                                       otherwise eat. */
@@ -440,11 +439,14 @@ fn align_two_snippets(s: &str, t: &str) -> String {
     };
 
     let new_t = t.lines()
-                 .filter(|line| !is_null(line))
-                 .map(|line| if add_or_not_remove {
-                     left_pad_with_spaces(line, delta)
-                 } else {
-                     remove_whitespace_from_left(line, delta)
+                 .filter_map(|line| {
+                     if is_null(line) {
+                         None
+                     } else if add_or_not_remove {
+                         Some(left_pad_with_spaces(line, delta))
+                     } else {
+                         Some(remove_whitespace_from_left(line, delta))
+                     }
                  })
                  .collect::<Vec<_>>().join("\n");
 
@@ -452,16 +454,14 @@ fn align_two_snippets(s: &str, t: &str) -> String {
 }
 
 fn align_snippets(xs: &[&str]) -> String {
-    match xs.len() {
-        0 => String::from(""),
-        _ => {
-            let mut ret = String::new();
-            ret.push_str(xs[0]);
-            for x in xs.iter().skip(1usize) {
-                ret = align_two_snippets(&ret, x);
-            }
-            ret
+    if xs.is_empty() {
+        String::from("")
+    } else {
+        let mut ret = xs[0].to_string();
+        for x in xs.iter().skip(1_usize) {
+            ret = align_two_snippets(&ret, x);
         }
+        ret
     }
 }
 
