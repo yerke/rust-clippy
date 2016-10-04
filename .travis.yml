@@ -18,6 +18,16 @@ install:
   - nvm use stable
   - npm install remark-cli remark-lint
 
+addons:
+  apt:
+    packages:
+      # all of these are for kcov
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev
+      - cmake
+      - gcc
+
 script:
  - remark -f README.md > /dev/null
  - python util/update_lints.py -c
@@ -32,3 +42,4 @@ script:
 after_success:
 - ./.github/deploy.sh
 - ./.github/clippy-service.sh
+- ./.github/cov.sh
