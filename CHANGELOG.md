@@ -1,6 +1,47 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 0.0.104 — 2016-12-15
+* Update to *rustc 1.15.0-nightly (8f02c429a 2016-12-15)*
+
+## 0.0.103 — 2016-11-25
+* Update to *rustc 1.15.0-nightly (d5814b03e 2016-11-23)*
+
+## 0.0.102 — 2016-11-24
+* Update to *rustc 1.15.0-nightly (3bf2be9ce 2016-11-22)*
+
+## 0.0.101 — 2016-11-23
+* Update to *rustc 1.15.0-nightly (7b3eeea22 2016-11-21)*
+* New lint: [`string_extend_chars`]
+
+## 0.0.100 — 2016-11-20
+* Update to *rustc 1.15.0-nightly (ac635aa95 2016-11-18)*
+
+## 0.0.99 — 2016-11-18
+* Update to rustc 1.15.0-nightly (0ed951993 2016-11-14)
+* New lint: [`get_unwrap`]
+
+## 0.0.98 — 2016-11-08
+* Fixes a an issue due to a change in how cargo handles `--sysroot`, which broke `cargo clippy`
+
+## 0.0.97 — 2016-11-03
+* For convenience, `cargo clippy` defines a `cargo-clippy` feature. This was
+  previously added for a short time under the name `clippy` but removed for
+  compatibility.
+* `cargo clippy --help` is more helping (and less helpful :smile:)
+* Rustup to *rustc 1.14.0-nightly (5665bdf3e 2016-11-02)*
+* New lints: [`if_let_redundant_pattern_matching`], [`partialeq_ne_impl`]
+
+## 0.0.96 — 2016-10-22
+* Rustup to *rustc 1.14.0-nightly (f09420685 2016-10-20)*
+* New lint: [`iter_skip_next`]
+
+## 0.0.95 — 2016-10-06
+* Rustup to *rustc 1.14.0-nightly (3210fd5c2 2016-10-05)*
+
+## 0.0.94 — 2016-10-04
+* Fixes bustage on Windows due to forbidden directory name
+
 ## 0.0.93 — 2016-10-03
 * Rustup to *rustc 1.14.0-nightly (144af3e97 2016-10-02)*
 * [`option_map_unwrap_or`] and [`option_map_unwrap_or_else`] are now
@@ -222,6 +263,7 @@ All notable changes to this project will be documented in this file.
 [`crosspointer_transmute`]: https://github.com/Manishearth/rust-clippy/wiki#crosspointer_transmute
 [`cyclomatic_complexity`]: https://github.com/Manishearth/rust-clippy/wiki#cyclomatic_complexity
 [`deprecated_semver`]: https://github.com/Manishearth/rust-clippy/wiki#deprecated_semver
+[`deref_addrof`]: https://github.com/Manishearth/rust-clippy/wiki#deref_addrof
 [`derive_hash_xor_eq`]: https://github.com/Manishearth/rust-clippy/wiki#derive_hash_xor_eq
 [`diverging_sub_expression`]: https://github.com/Manishearth/rust-clippy/wiki#diverging_sub_expression
 [`doc_markdown`]: https://github.com/Manishearth/rust-clippy/wiki#doc_markdown
@@ -246,7 +288,10 @@ All notable changes to this project will be documented in this file.
 [`for_kv_map`]: https://github.com/Manishearth/rust-clippy/wiki#for_kv_map
 [`for_loop_over_option`]: https://github.com/Manishearth/rust-clippy/wiki#for_loop_over_option
 [`for_loop_over_result`]: https://github.com/Manishearth/rust-clippy/wiki#for_loop_over_result
+[`get_unwrap`]: https://github.com/Manishearth/rust-clippy/wiki#get_unwrap
 [`identity_op`]: https://github.com/Manishearth/rust-clippy/wiki#identity_op
+[`if_let_redundant_pattern_matching`]: https://github.com/Manishearth/rust-clippy/wiki#if_let_redundant_pattern_matching
+[`if_let_some_result`]: https://github.com/Manishearth/rust-clippy/wiki#if_let_some_result
 [`if_not_else`]: https://github.com/Manishearth/rust-clippy/wiki#if_not_else
 [`if_same_then_else`]: https://github.com/Manishearth/rust-clippy/wiki#if_same_then_else
 [`ifs_same_cond`]: https://github.com/Manishearth/rust-clippy/wiki#ifs_same_cond
@@ -259,6 +304,7 @@ All notable changes to this project will be documented in this file.
 [`items_after_statements`]: https://github.com/Manishearth/rust-clippy/wiki#items_after_statements
 [`iter_next_loop`]: https://github.com/Manishearth/rust-clippy/wiki#iter_next_loop
 [`iter_nth`]: https://github.com/Manishearth/rust-clippy/wiki#iter_nth
+[`iter_skip_next`]: https://github.com/Manishearth/rust-clippy/wiki#iter_skip_next
 [`len_without_is_empty`]: https://github.com/Manishearth/rust-clippy/wiki#len_without_is_empty
 [`len_zero`]: https://github.com/Manishearth/rust-clippy/wiki#len_zero
 [`let_and_return`]: https://github.com/Manishearth/rust-clippy/wiki#let_and_return
@@ -306,6 +352,7 @@ All notable changes to this project will be documented in this file.
 [`out_of_bounds_indexing`]: https://github.com/Manishearth/rust-clippy/wiki#out_of_bounds_indexing
 [`overflow_check_conditional`]: https://github.com/Manishearth/rust-clippy/wiki#overflow_check_conditional
 [`panic_params`]: https://github.com/Manishearth/rust-clippy/wiki#panic_params
+[`partialeq_ne_impl`]: https://github.com/Manishearth/rust-clippy/wiki#partialeq_ne_impl
 [`precedence`]: https://github.com/Manishearth/rust-clippy/wiki#precedence
 [`print_stdout`]: https://github.com/Manishearth/rust-clippy/wiki#print_stdout
 [`print_with_newline`]: https://github.com/Manishearth/rust-clippy/wiki#print_with_newline
@@ -331,6 +378,7 @@ All notable changes to this project will be documented in this file.
 [`str_to_string`]: https://github.com/Manishearth/rust-clippy/wiki#str_to_string
 [`string_add`]: https://github.com/Manishearth/rust-clippy/wiki#string_add
 [`string_add_assign`]: https://github.com/Manishearth/rust-clippy/wiki#string_add_assign
+[`string_extend_chars`]: https://github.com/Manishearth/rust-clippy/wiki#string_extend_chars
 [`string_lit_as_bytes`]: https://github.com/Manishearth/rust-clippy/wiki#string_lit_as_bytes
 [`string_to_string`]: https://github.com/Manishearth/rust-clippy/wiki#string_to_string
 [`stutter`]: https://github.com/Manishearth/rust-clippy/wiki#stutter

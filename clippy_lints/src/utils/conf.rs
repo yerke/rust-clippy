@@ -2,31 +2,28 @@
 
 #![deny(missing_docs_in_private_items)]
 
-use std::{fmt, fs, io};
+use std::{env, fmt, fs, io, path};
 use std::io::Read;
 use syntax::{ast, codemap};
-use syntax::parse::token;
 use toml;
 
 /// Get the configuration file from arguments.
-pub fn file(args: &[codemap::Spanned<ast::NestedMetaItemKind>]) -> Result<Option<token::InternedString>, (&'static str, codemap::Span)> {
+pub fn file_from_args(args: &[codemap::Spanned<ast::NestedMetaItemKind>]) -> Result<Option<path::PathBuf>, (&'static str, codemap::Span)> {
     for arg in args.iter().filter_map(|a| a.meta_item()) {
-        match arg.node {
-            ast::MetaItemKind::Word(ref name) |
-            ast::MetaItemKind::List(ref name, _) => {
-                if name == &"conf_file" {
-                    return Err(("`conf_file` must be a named value", arg.span));
+        if arg.name() == "conf_file" {
+            return match arg.node {
+                ast::MetaItemKind::Word |
+                ast::MetaItemKind::List(_) => {
+                    Err(("`conf_file` must be a named value", arg.span))
                 }
-            }
-            ast::MetaItemKind::NameValue(ref name, ref value) => {
-                if name == &"conf_file" {
-                    return if let ast::LitKind::Str(ref file, _) = value.node {
-                        Ok(Some(file.clone()))
+                ast::MetaItemKind::NameValue(ref value) => {
+                    if let ast::LitKind::Str(ref file, _) = value.node {
+                        Ok(Some(file.to_string().into()))
                     } else {
                         Err(("`conf_file` value must be a string", value.span))
-                    };
+                    }
                 }
-            }
+            };
         }
     }
 
@@ -162,11 +159,11 @@ macro_rules! define_Conf {
 
 define_Conf! {
     /// Lint: BLACKLISTED_NAME. The list of blacklisted names to lint about
-    ("blacklisted-names", blacklisted_names, ["foo", "bar", "baz"] => Vec<String>),
+    ("blacklisted-names", blacklisted_names, ["foo", "bar", "baz", "quux"] => Vec<String>),
     /// Lint: CYCLOMATIC_COMPLEXITY. The maximum cyclomatic complexity a function can have
     ("cyclomatic-complexity-threshold", cyclomatic_complexity_threshold, 25 => u64),
     /// Lint: DOC_MARKDOWN. The list of words this lint should not consider as identifiers needing ticks
-    ("doc-valid-idents", doc_valid_idents, ["MiB", "GiB", "TiB", "PiB", "EiB", "DirectX", "GPLv2", "GPLv3", "GitHub", "IPv4", "IPv6", "JavaScript", "NaN", "OAuth", "OpenGL", "TrueType"] => Vec<String>),
+    ("doc-valid-idents", doc_valid_idents, ["MiB", "GiB", "TiB", "PiB", "EiB", "DirectX", "GPLv2", "GPLv3", "GitHub", "IPv4", "IPv6", "JavaScript", "NaN", "OAuth", "OpenGL", "TrueType", "iOS", "macOS"] => Vec<String>),
     /// Lint: TOO_MANY_ARGUMENTS. The maximum number of argument a function or method can have
     ("too-many-arguments-threshold", too_many_arguments_threshold, 7 => u64),
     /// Lint: TYPE_COMPLEXITY. The maximum complexity a type can have
@@ -179,12 +176,50 @@ define_Conf! {
     ("enum-variant-name-threshold", enum_variant_name_threshold, 3 => u64),
 }
 
-/// Read the `toml` configuration file. The function will ignore “File not found” errors iif
-/// `!must_exist`, in which case, it will return the default configuration.
+/// Search for the configuration file.
+pub fn lookup_conf_file() -> io::Result<Option<path::PathBuf>> {
+    /// Possible filename to search for.
+    const CONFIG_FILE_NAMES: [&'static str; 2] = [".clippy.toml", "clippy.toml"];
+
+    let mut current = try!(env::current_dir());
+
+    loop {
+        for config_file_name in &CONFIG_FILE_NAMES {
+            let config_file = current.join(config_file_name);
+            match fs::metadata(&config_file) {
+                // Only return if it's a file to handle the unlikely situation of a directory named
+                // `clippy.toml`.
+                Ok(ref md) if md.is_file() => return Ok(Some(config_file)),
+                // Return the error if it's something other than `NotFound`; otherwise we didn't
+                // find the project file yet, and continue searching.
+                Err(e) => {
+                    if e.kind() != io::ErrorKind::NotFound {
+                        return Err(e);
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        // If the current directory has no parent, we're done searching.
+        if !current.pop() {
+            return Ok(None);
+        }
+    }
+}
+
+/// Read the `toml` configuration file.
+///
 /// In case of error, the function tries to continue as much as possible.
-pub fn read(path: &str, must_exist: bool) -> (Conf, Vec<Error>) {
+pub fn read(path: Option<&path::Path>) -> (Conf, Vec<Error>) {
     let mut conf = Conf::default();
     let mut errors = Vec::new();
+
+    let path = if let Some(path) = path {
+        path
+    } else {
+        return (conf, errors);
+    };
 
     let file = match fs::File::open(path) {
         Ok(mut file) => {
@@ -196,9 +231,6 @@ pub fn read(path: &str, must_exist: bool) -> (Conf, Vec<Error>) {
             }
 
             buf
-        }
-        Err(ref err) if !must_exist && err.kind() == io::ErrorKind::NotFound => {
-            return (conf, errors);
         }
         Err(err) => {
             errors.push(err.into());

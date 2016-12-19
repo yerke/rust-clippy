@@ -6,8 +6,7 @@ use rustc::hir::*;
 use semver::Version;
 use syntax::ast::{Attribute, Lit, LitKind, MetaItemKind, NestedMetaItem, NestedMetaItemKind};
 use syntax::codemap::Span;
-use utils::{in_macro, match_path, span_lint, span_lint_and_then, snippet_opt};
-use utils::paths;
+use utils::{in_macro, match_def_path, resolve_node, paths, span_lint, span_lint_and_then, snippet_opt};
 
 /// **What it does:** Checks for items annotated with `#[inline(always)]`,
 /// unless the annotated function is empty or simply panics.
@@ -82,17 +81,17 @@ impl LintPass for AttrPass {
     }
 }
 
-impl LateLintPass for AttrPass {
-    fn check_attribute(&mut self, cx: &LateContext, attr: &Attribute) {
-        if let MetaItemKind::List(ref name, ref items) = attr.node.value.node {
-            if items.is_empty() || name != &"deprecated" {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for AttrPass {
+    fn check_attribute(&mut self, cx: &LateContext<'a, 'tcx>, attr: &'tcx Attribute) {
+        if let MetaItemKind::List(ref items) = attr.value.node {
+            if items.is_empty() || attr.name() != "deprecated" {
                 return;
             }
             for item in items {
                 if_let_chain! {[
                     let NestedMetaItemKind::MetaItem(ref mi) = item.node,
-                    let MetaItemKind::NameValue(ref name, ref lit) = mi.node,
-                    name == &"since",
+                    let MetaItemKind::NameValue(ref lit) = mi.node,
+                    mi.name() == "since",
                 ], {
                     check_semver(cx, item.span, lit);
                 }}
@@ -100,21 +99,21 @@ impl LateLintPass for AttrPass {
         }
     }
 
-    fn check_item(&mut self, cx: &LateContext, item: &Item) {
-        if is_relevant_item(item) {
+    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx Item) {
+        if is_relevant_item(cx, item) {
             check_attrs(cx, item.span, &item.name, &item.attrs)
         }
         match item.node {
             ItemExternCrate(_) |
-            ItemUse(_) => {
+            ItemUse(_, _) => {
                 for attr in &item.attrs {
-                    if let MetaItemKind::List(ref name, ref lint_list) = attr.node.value.node {
-                        match &**name {
+                    if let MetaItemKind::List(ref lint_list) = attr.value.node {
+                        match &*attr.name().as_str() {
                             "allow" | "warn" | "deny" | "forbid" => {
                                 // whitelist `unused_imports`
                                 for lint in lint_list {
                                     if is_word(lint, "unused_imports") {
-                                        if let ItemUse(_) = item.node {
+                                        if let ItemUse(_, _) = item.node {
                                             return;
                                         }
                                     }
@@ -139,63 +138,64 @@ impl LateLintPass for AttrPass {
         }
     }
 
-    fn check_impl_item(&mut self, cx: &LateContext, item: &ImplItem) {
-        if is_relevant_impl(item) {
+    fn check_impl_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx ImplItem) {
+        if is_relevant_impl(cx, item) {
             check_attrs(cx, item.span, &item.name, &item.attrs)
         }
     }
 
-    fn check_trait_item(&mut self, cx: &LateContext, item: &TraitItem) {
-        if is_relevant_trait(item) {
+    fn check_trait_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx TraitItem) {
+        if is_relevant_trait(cx, item) {
             check_attrs(cx, item.span, &item.name, &item.attrs)
         }
     }
 }
 
-fn is_relevant_item(item: &Item) -> bool {
-    if let ItemFn(_, _, _, _, _, ref block) = item.node {
-        is_relevant_block(block)
+fn is_relevant_item(cx: &LateContext, item: &Item) -> bool {
+    if let ItemFn(_, _, _, _, _, eid) = item.node {
+        is_relevant_expr(cx, cx.tcx.map.expr(eid))
     } else {
         false
     }
 }
 
-fn is_relevant_impl(item: &ImplItem) -> bool {
+fn is_relevant_impl(cx: &LateContext, item: &ImplItem) -> bool {
     match item.node {
-        ImplItemKind::Method(_, ref block) => is_relevant_block(block),
+        ImplItemKind::Method(_, eid) => is_relevant_expr(cx, cx.tcx.map.expr(eid)),
         _ => false,
     }
 }
 
-fn is_relevant_trait(item: &TraitItem) -> bool {
+fn is_relevant_trait(cx: &LateContext, item: &TraitItem) -> bool {
     match item.node {
         MethodTraitItem(_, None) => true,
-        MethodTraitItem(_, Some(ref block)) => is_relevant_block(block),
+        MethodTraitItem(_, Some(eid)) => is_relevant_expr(cx, cx.tcx.map.expr(eid)),
         _ => false,
     }
 }
 
-fn is_relevant_block(block: &Block) -> bool {
+fn is_relevant_block(cx: &LateContext, block: &Block) -> bool {
     for stmt in &block.stmts {
         match stmt.node {
             StmtDecl(_, _) => return true,
             StmtExpr(ref expr, _) |
             StmtSemi(ref expr, _) => {
-                return is_relevant_expr(expr);
+                return is_relevant_expr(cx, expr);
             }
         }
     }
-    block.expr.as_ref().map_or(false, |e| is_relevant_expr(e))
+    block.expr.as_ref().map_or(false, |e| is_relevant_expr(cx, e))
 }
 
-fn is_relevant_expr(expr: &Expr) -> bool {
+fn is_relevant_expr(cx: &LateContext, expr: &Expr) -> bool {
     match expr.node {
-        ExprBlock(ref block) => is_relevant_block(block),
-        ExprRet(Some(ref e)) => is_relevant_expr(e),
-        ExprRet(None) | ExprBreak(_) => false,
+        ExprBlock(ref block) => is_relevant_block(cx, block),
+        ExprRet(Some(ref e)) => is_relevant_expr(cx, e),
+        ExprRet(None) | ExprBreak(_, None) => false,
         ExprCall(ref path_expr, _) => {
-            if let ExprPath(_, ref path) = path_expr.node {
-                !match_path(path, &paths::BEGIN_PANIC)
+            if let ExprPath(ref qpath) = path_expr.node {
+                let fun_id = resolve_node(cx, qpath, path_expr.id).def_id();
+                !match_def_path(cx, fun_id, &paths::BEGIN_PANIC)
             } else {
                 true
             }
@@ -210,8 +210,8 @@ fn check_attrs(cx: &LateContext, span: Span, name: &Name, attrs: &[Attribute]) {
     }
 
     for attr in attrs {
-        if let MetaItemKind::List(ref inline, ref values) = attr.node.value.node {
-            if values.len() != 1 || inline != &"inline" {
+        if let MetaItemKind::List(ref values) = attr.value.node {
+            if values.len() != 1 || attr.name() != "inline" {
                 continue;
             }
             if is_word(&values[0], "always") {
@@ -227,7 +227,7 @@ fn check_attrs(cx: &LateContext, span: Span, name: &Name, attrs: &[Attribute]) {
 
 fn check_semver(cx: &LateContext, span: Span, lit: &Lit) {
     if let LitKind::Str(ref is, _) = lit.node {
-        if Version::parse(&*is).is_ok() {
+        if Version::parse(&*is.as_str()).is_ok() {
             return;
         }
     }
@@ -239,10 +239,8 @@ fn check_semver(cx: &LateContext, span: Span, lit: &Lit) {
 
 fn is_word(nmi: &NestedMetaItem, expected: &str) -> bool {
     if let NestedMetaItemKind::MetaItem(ref mi) = nmi.node {
-        if let MetaItemKind::Word(ref word) = mi.node {
-            return word == expected;
-        }
+        mi.is_word() && mi.name() == expected
+    } else {
+        false
     }
-
-    false
 }

@@ -79,8 +79,8 @@ impl LintPass for StringAdd {
     }
 }
 
-impl LateLintPass for StringAdd {
-    fn check_expr(&mut self, cx: &LateContext, e: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for StringAdd {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, e: &'tcx Expr) {
         if let ExprBinary(Spanned { node: BiAdd, .. }, ref left, _) = e.node {
             if is_string(cx, left) {
                 if let Allow = cx.current_level(STRING_ADD_ASSIGN) {
@@ -114,7 +114,7 @@ impl LateLintPass for StringAdd {
 }
 
 fn is_string(cx: &LateContext, e: &Expr) -> bool {
-    match_type(cx, walk_ptrs_ty(cx.tcx.expr_ty(e)), &paths::STRING)
+    match_type(cx, walk_ptrs_ty(cx.tcx.tables().expr_ty(e)), &paths::STRING)
 }
 
 fn is_add(cx: &LateContext, src: &Expr, target: &Expr) -> bool {
@@ -136,17 +136,17 @@ impl LintPass for StringLitAsBytes {
     }
 }
 
-impl LateLintPass for StringLitAsBytes {
-    fn check_expr(&mut self, cx: &LateContext, e: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for StringLitAsBytes {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, e: &'tcx Expr) {
         use std::ascii::AsciiExt;
         use syntax::ast::LitKind;
         use utils::{snippet, in_macro};
 
         if let ExprMethodCall(ref name, _, ref args) = e.node {
-            if name.node.as_str() == "as_bytes" {
+            if &*name.node.as_str() == "as_bytes" {
                 if let ExprLit(ref lit) = args[0].node {
                     if let LitKind::Str(ref lit_content, _) = lit.node {
-                        if lit_content.chars().all(|c| c.is_ascii()) && !in_macro(cx, args[0].span) {
+                        if lit_content.as_str().chars().all(|c| c.is_ascii()) && !in_macro(cx, args[0].span) {
                             span_lint_and_then(cx,
                                                STRING_LIT_AS_BYTES,
                                                e.span,

@@ -3,13 +3,13 @@
 #![feature(box_syntax)]
 #![feature(collections)]
 #![feature(custom_attribute)]
-#![feature(dotdot_in_tuple_patterns)]
-#![feature(question_mark)]
 #![feature(rustc_private)]
 #![feature(slice_patterns)]
 #![feature(stmt_expr_attributes)]
+#![feature(repeat_str)]
 
 #![allow(indexing_slicing, shadow_reuse, unknown_lints, missing_docs_in_private_items)]
+#![allow(needless_lifetimes)]
 
 #[macro_use]
 extern crate syntax;
@@ -82,6 +82,7 @@ pub mod format;
 pub mod formatting;
 pub mod functions;
 pub mod identity_op;
+pub mod if_let_redundant_pattern_matching;
 pub mod if_not_else;
 pub mod items_after_statements;
 pub mod len_zero;
@@ -106,13 +107,16 @@ pub mod neg_multiply;
 pub mod new_without_default;
 pub mod no_effect;
 pub mod non_expressive_names;
+pub mod ok_if_let;
 pub mod open_options;
 pub mod overflow_check_conditional;
 pub mod panic;
+pub mod partialeq_ne_impl;
 pub mod precedence;
 pub mod print;
 pub mod ptr;
 pub mod ranges;
+pub mod reference;
 pub mod regex;
 pub mod returns;
 pub mod serde;
@@ -135,17 +139,23 @@ mod reexport {
 
 #[cfg_attr(rustfmt, rustfmt_skip)]
 pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
-    let conf = match utils::conf::file(reg.args()) {
+    let conf = match utils::conf::file_from_args(reg.args()) {
         Ok(file_name) => {
             // if the user specified a file, it must exist, otherwise default to `clippy.toml` but
             // do not require the file to exist
-            let (file_name, must_exist) = if let Some(ref file_name) = file_name {
-                (&**file_name, true)
+            let file_name = if let Some(file_name) = file_name {
+                Some(file_name)
             } else {
-                ("clippy.toml", false)
+                match utils::conf::lookup_conf_file() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        reg.sess.struct_err(&format!("error reading Clippy's configuration file: {}", error)).emit();
+                        None
+                    }
+                }
             };
 
-            let (conf, errors) = utils::conf::read(file_name, must_exist);
+            let (conf, errors) = utils::conf::read(file_name.as_ref().map(|p| p.as_ref()));
 
             // all conf errors are non-fatal, we just use the default conf in case of error
             for error in errors {
@@ -172,6 +182,7 @@ pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
     reg.register_late_lint_pass(box serde::Serde);
     reg.register_early_lint_pass(box utils::internal_lints::Clippy);
     reg.register_late_lint_pass(box utils::internal_lints::LintWithoutLintPass::default());
+    reg.register_late_lint_pass(box utils::inspector::Pass);
     reg.register_late_lint_pass(box types::TypePass);
     reg.register_late_lint_pass(box booleans::NonminimalBool);
     reg.register_late_lint_pass(box eq_op::EqOp);
@@ -247,13 +258,17 @@ pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
     reg.register_late_lint_pass(box functions::Functions::new(conf.too_many_arguments_threshold));
     reg.register_early_lint_pass(box doc::Doc::new(conf.doc_valid_idents));
     reg.register_late_lint_pass(box neg_multiply::NegMultiply);
-    reg.register_late_lint_pass(box unsafe_removed_from_name::UnsafeNameRemoval);
+    reg.register_early_lint_pass(box unsafe_removed_from_name::UnsafeNameRemoval);
     reg.register_late_lint_pass(box mem_forget::MemForget);
     reg.register_late_lint_pass(box arithmetic::Arithmetic::default());
     reg.register_late_lint_pass(box assign_ops::AssignOps);
     reg.register_late_lint_pass(box let_if_seq::LetIfSeq);
     reg.register_late_lint_pass(box eval_order_dependence::EvalOrderDependence);
     reg.register_late_lint_pass(box missing_doc::MissingDoc::new());
+    reg.register_late_lint_pass(box ok_if_let::Pass);
+    reg.register_late_lint_pass(box if_let_redundant_pattern_matching::Pass);
+    reg.register_late_lint_pass(box partialeq_ne_impl::Pass);
+    reg.register_early_lint_pass(box reference::Pass);
 
     reg.register_lint_group("clippy_restrictions", vec![
         arithmetic::FLOAT_ARITHMETIC,
@@ -341,6 +356,7 @@ pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
         functions::NOT_UNSAFE_PTR_ARG_DEREF,
         functions::TOO_MANY_ARGUMENTS,
         identity_op::IDENTITY_OP,
+        if_let_redundant_pattern_matching::IF_LET_REDUNDANT_PATTERN_MATCHING,
         len_zero::LEN_WITHOUT_IS_EMPTY,
         len_zero::LEN_ZERO,
         let_if_seq::USELESS_LET_IF_SEQ,
@@ -369,13 +385,16 @@ pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
         methods::CLONE_ON_COPY,
         methods::EXTEND_FROM_SLICE,
         methods::FILTER_NEXT,
+        methods::GET_UNWRAP,
         methods::ITER_NTH,
+        methods::ITER_SKIP_NEXT,
         methods::NEW_RET_NO_SELF,
         methods::OK_EXPECT,
         methods::OR_FUN_CALL,
         methods::SEARCH_IS_SOME,
         methods::SHOULD_IMPLEMENT_TRAIT,
         methods::SINGLE_CHAR_PATTERN,
+        methods::STRING_EXTEND_CHARS,
         methods::TEMPORARY_CSTRING_AS_PTR,
         methods::WRONG_SELF_CONVENTION,
         minmax::MIN_MAX,
@@ -404,15 +423,18 @@ pub fn register_plugins(reg: &mut rustc_plugin::Registry) {
         no_effect::NO_EFFECT,
         no_effect::UNNECESSARY_OPERATION,
         non_expressive_names::MANY_SINGLE_CHAR_NAMES,
+        ok_if_let::IF_LET_SOME_RESULT,
         open_options::NONSENSICAL_OPEN_OPTIONS,
         overflow_check_conditional::OVERFLOW_CHECK_CONDITIONAL,
         panic::PANIC_PARAMS,
+        partialeq_ne_impl::PARTIALEQ_NE_IMPL,
         precedence::PRECEDENCE,
         print::PRINT_WITH_NEWLINE,
         ptr::CMP_NULL,
         ptr::PTR_ARG,
         ranges::RANGE_STEP_BY_ZERO,
         ranges::RANGE_ZIP_WITH_LEN,
+        reference::DEREF_ADDROF,
         regex::INVALID_REGEX,
         regex::REGEX_MACRO,
         regex::TRIVIAL_REGEX,

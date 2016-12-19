@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::ops::Mul;
+use std::iter::FromIterator;
 
 struct T;
 
@@ -172,6 +173,19 @@ impl IteratorFalsePositives {
 
     fn nth(self, n: usize) -> Option<u32> {
         Some(self.foo)
+    }
+
+    fn skip(self, _: usize) -> IteratorFalsePositives {
+        self
+    }
+}
+
+#[derive(Copy, Clone)]
+struct HasChars;
+
+impl HasChars {
+    fn chars(self) -> std::str::Chars<'static> {
+        "HasChars".chars()
     }
 }
 
@@ -363,6 +377,92 @@ fn iter_nth() {
     let ok_mut = false_positive.iter_mut().nth(3);
 }
 
+/// Checks implementation of `ITER_SKIP_NEXT` lint
+fn iter_skip_next() {
+    let mut some_vec = vec![0, 1, 2, 3];
+
+    let _ = some_vec.iter().skip(42).next();
+    //~^ERROR called `skip(x).next()` on an iterator. This is more succinctly expressed by calling `nth(x)`
+
+    let _ = some_vec.iter().cycle().skip(42).next();
+    //~^ERROR called `skip(x).next()` on an iterator. This is more succinctly expressed by calling `nth(x)`
+
+    let _ = (1..10).skip(10).next();
+    //~^ERROR called `skip(x).next()` on an iterator. This is more succinctly expressed by calling `nth(x)`
+
+    let _ = &some_vec[..].iter().skip(3).next();
+    //~^ERROR called `skip(x).next()` on an iterator. This is more succinctly expressed by calling `nth(x)`
+
+    let foo = IteratorFalsePositives { foo : 0 };
+    let _ = foo.skip(42).next();
+    let _ = foo.filter().skip(42).next();
+}
+
+struct GetFalsePositive {
+    arr: [u32; 3],
+}
+
+impl GetFalsePositive {
+    fn get(&self, pos: usize) -> Option<&u32> { self.arr.get(pos) }
+    fn get_mut(&mut self, pos: usize) -> Option<&mut u32> { self.arr.get_mut(pos) }
+}
+
+/// Checks implementation of `GET_UNWRAP` lint
+fn get_unwrap() {
+    let mut some_slice = &mut [0, 1, 2, 3];
+    let mut some_vec = vec![0, 1, 2, 3];
+    let mut some_vecdeque: VecDeque<_> = some_vec.iter().cloned().collect();
+    let mut some_hashmap: HashMap<u8, char> = HashMap::from_iter(vec![(1, 'a'), (2, 'b')]);
+    let mut some_btreemap: BTreeMap<u8, char> = BTreeMap::from_iter(vec![(1, 'a'), (2, 'b')]);
+    let mut false_positive = GetFalsePositive { arr: [0, 1, 2] };
+
+    { // Test `get().unwrap()`
+        let _ = some_slice.get(0).unwrap();
+        //~^ERROR called `.get().unwrap()` on a slice. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION some_slice[0]
+        let _ = some_vec.get(0).unwrap();
+        //~^ERROR called `.get().unwrap()` on a Vec. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION some_vec[0]
+        let _ = some_vecdeque.get(0).unwrap();
+        //~^ERROR called `.get().unwrap()` on a VecDeque. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION some_vecdeque[0]
+        let _ = some_hashmap.get(&1).unwrap();
+        //~^ERROR called `.get().unwrap()` on a HashMap. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION some_hashmap[&1]
+        let _ = some_btreemap.get(&1).unwrap();
+        //~^ERROR called `.get().unwrap()` on a BTreeMap. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION some_btreemap[&1]
+
+        let _ = false_positive.get(0).unwrap();
+    }
+
+    { // Test `get_mut().unwrap()`
+        *some_slice.get_mut(0).unwrap() = 1;
+        //~^ERROR called `.get_mut().unwrap()` on a slice. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION &mut some_slice[0]
+        *some_vec.get_mut(0).unwrap() = 1;
+        //~^ERROR called `.get_mut().unwrap()` on a Vec. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION &mut some_vec[0]
+        *some_vecdeque.get_mut(0).unwrap() = 1;
+        //~^ERROR called `.get_mut().unwrap()` on a VecDeque. Using `[]` is more clear and more concise
+        //~|HELP try this
+        //~|SUGGESTION &mut some_vecdeque[0]
+
+        // Check false positives
+        *some_hashmap.get_mut(&1).unwrap() = 'b';
+        *some_btreemap.get_mut(&1).unwrap() = 'b';
+        *false_positive.get_mut(0).unwrap() = 1;
+    }
+}
+
+
 #[allow(similar_names)]
 fn main() {
     use std::io;
@@ -431,6 +531,37 @@ fn use_extend_from_slice() {
     //~^ERROR use of `extend
     //~| HELP try this
     //~| SUGGESTION v.extend_from_slice(&["But", "this"]);
+}
+
+fn str_extend_chars() {
+    let abc = "abc";
+    let def = String::from("def");
+    let mut s = String::new();
+
+    s.push_str(abc);
+    s.extend(abc.chars());
+    //~^ERROR calling `.extend(_.chars())`
+    //~|HELP try this
+    //~|SUGGESTION s.push_str(abc)
+
+    s.push_str("abc");
+    s.extend("abc".chars());
+    //~^ERROR calling `.extend(_.chars())`
+    //~|HELP try this
+    //~|SUGGESTION s.push_str("abc")
+
+    s.push_str(&def);
+    s.extend(def.chars());
+    //~^ERROR calling `.extend(_.chars())`
+    //~|HELP try this
+    //~|SUGGESTION s.push_str(&def)
+
+    s.extend(abc.chars().skip(1));
+    s.extend("abc".chars().skip(1));
+    s.extend(['a', 'b', 'c'].iter());
+
+    let f = HasChars;
+    s.extend(f.chars());
 }
 
 fn clone_on_copy() {

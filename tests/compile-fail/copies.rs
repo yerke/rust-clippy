@@ -1,5 +1,4 @@
 #![feature(plugin, inclusive_range_syntax)]
-#![feature(dotdot_in_tuple_patterns)]
 #![plugin(clippy)]
 
 #![allow(dead_code, no_effect, unnecessary_operation)]
@@ -10,12 +9,19 @@
 #![allow(blacklisted_name)]
 #![allow(collapsible_if)]
 #![allow(zero_divided_by_zero, eq_op)]
+#![allow(path_statements)]
 
 fn bar<T>(_: T) {}
 fn foo() -> bool { unimplemented!() }
 
 struct Foo {
     bar: u8,
+}
+
+pub enum Abc {
+    A,
+    B,
+    C,
 }
 
 #[deny(if_same_then_else)]
@@ -73,7 +79,7 @@ fn if_same_then_else() -> Result<&'static str, ()> {
     let _ = match 42 {
         42 => {
             //~^ NOTE same as this
-            //~| NOTE refactoring
+            //~| NOTE removing
             foo();
             let mut a = 42 + [23].len() as i32;
             if true {
@@ -91,6 +97,14 @@ fn if_same_then_else() -> Result<&'static str, ()> {
             a = -31-a;
             a
         }
+    };
+
+    let _ = match Abc::A {
+        Abc::A => 0,
+        //~^ NOTE same as this
+        //~| NOTE removing
+        Abc::B => 1,
+        _ => 0, //~ERROR this `match` has identical arm bodies
     };
 
     if true {
@@ -221,6 +235,13 @@ fn if_same_then_else() -> Result<&'static str, ()> {
     }
     else {
         if let Some(42) = None {}
+    }
+
+    if true {
+        if let Some(42) = None::<u8> {}
+    }
+    else {
+        if let Some(42) = None::<u32> {}
     }
 
     if true {

@@ -2,7 +2,6 @@ use consts::{Constant, constant_simple};
 use rustc::lint::*;
 use rustc::hir::*;
 use std::cmp::{PartialOrd, Ordering};
-use syntax::ptr::P;
 use utils::{match_def_path, paths, span_lint};
 
 /// **What it does:** Checks for expressions where `std::cmp::min` and `max` are
@@ -34,8 +33,8 @@ impl LintPass for MinMaxPass {
     }
 }
 
-impl LateLintPass for MinMaxPass {
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for MinMaxPass {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if let Some((outer_max, outer_c, oe)) = min_max(cx, expr) {
             if let Some((inner_max, inner_c, _)) = min_max(cx, oe) {
                 if outer_max == inner_max {
@@ -62,8 +61,8 @@ enum MinMax {
 
 fn min_max<'a>(cx: &LateContext, expr: &'a Expr) -> Option<(MinMax, Constant, &'a Expr)> {
     if let ExprCall(ref path, ref args) = expr.node {
-        if let ExprPath(None, _) = path.node {
-            let def_id = cx.tcx.expect_def(path.id).def_id();
+        if let ExprPath(ref qpath) = path.node {
+            let def_id = cx.tcx.tables().qpath_def(qpath, path.id).def_id();
 
             if match_def_path(cx, def_id, &paths::CMP_MIN) {
                 fetch_const(args, MinMax::Min)
@@ -80,12 +79,12 @@ fn min_max<'a>(cx: &LateContext, expr: &'a Expr) -> Option<(MinMax, Constant, &'
     }
 }
 
-fn fetch_const(args: &[P<Expr>], m: MinMax) -> Option<(MinMax, Constant, &Expr)> {
+fn fetch_const(args: &[Expr], m: MinMax) -> Option<(MinMax, Constant, &Expr)> {
     if args.len() != 2 {
         return None;
     }
     if let Some(c) = constant_simple(&args[0]) {
-        if let None = constant_simple(&args[1]) {
+        if constant_simple(&args[1]).is_none() {
             // otherwise ignore
             Some((m, c, &args[1]))
         } else {

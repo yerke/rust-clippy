@@ -1,8 +1,8 @@
 use rustc::lint::*;
 use rustc::hir::*;
-use rustc::hir::intravisit::{Visitor, walk_expr};
+use rustc::hir::intravisit::{Visitor, walk_expr, NestedVisitorMap};
 use utils::{paths, match_path, span_lint};
-use syntax::parse::token::InternedString;
+use syntax::symbol::InternedString;
 use syntax::ast::{Name, NodeId, ItemKind, Crate as AstCrate};
 use syntax::codemap::Span;
 use std::collections::{HashSet, HashMap};
@@ -63,9 +63,9 @@ impl LintPass for Clippy {
 
 impl EarlyLintPass for Clippy {
     fn check_crate(&mut self, cx: &EarlyContext, krate: &AstCrate) {
-        if let Some(utils) = krate.module.items.iter().find(|item| item.ident.name.as_str() == "utils") {
+        if let Some(utils) = krate.module.items.iter().find(|item| item.ident.name == "utils") {
             if let ItemKind::Mod(ref utils_mod) = utils.node {
-                if let Some(paths) = utils_mod.items.iter().find(|item| item.ident.name.as_str() == "paths") {
+                if let Some(paths) = utils_mod.items.iter().find(|item| item.ident.name == "paths") {
                     if let ItemKind::Mod(ref paths_mod) = paths.node {
                         let mut last_name: Option<InternedString> = None;
                         for item in &paths_mod.items {
@@ -104,19 +104,19 @@ impl LintPass for LintWithoutLintPass {
 }
 
 
-impl LateLintPass for LintWithoutLintPass {
-    fn check_item(&mut self, _: &LateContext, item: &Item) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for LintWithoutLintPass {
+    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx Item) {
         if let ItemStatic(ref ty, MutImmutable, ref expr) = item.node {
             if is_lint_ref_type(ty) {
                 self.declared_lints.insert(item.name, item.span);
-            } else if is_lint_array_type(ty) && item.vis == Visibility::Inherited && item.name.as_str() == "ARRAY" {
-                let mut collector = LintCollector { output: &mut self.registered_lints };
+            } else if is_lint_array_type(ty) && item.vis == Visibility::Inherited && item.name == "ARRAY" {
+                let mut collector = LintCollector { output: &mut self.registered_lints, cx: cx };
                 collector.visit_expr(expr);
             }
         }
     }
 
-    fn check_crate_post(&mut self, cx: &LateContext, _: &Crate) {
+    fn check_crate_post(&mut self, cx: &LateContext<'a, 'tcx>, _: &'tcx Crate) {
         for (lint_name, &lint_span) in &self.declared_lints {
             // When using the `declare_lint!` macro, the original `lint_span`'s
             // file points to "<rustc macros>".
@@ -140,7 +140,7 @@ impl LateLintPass for LintWithoutLintPass {
 
 fn is_lint_ref_type(ty: &Ty) -> bool {
     if let TyRptr(Some(_), MutTy { ty: ref inner, mutbl: MutImmutable }) = ty.node {
-        if let TyPath(None, ref path) = inner.node {
+        if let TyPath(ref path) = inner.node {
             return match_path(path, &paths::LINT);
         }
     }
@@ -149,25 +149,29 @@ fn is_lint_ref_type(ty: &Ty) -> bool {
 
 
 fn is_lint_array_type(ty: &Ty) -> bool {
-    if let TyPath(None, ref path) = ty.node {
+    if let TyPath(ref path) = ty.node {
         match_path(path, &paths::LINT_ARRAY)
     } else {
         false
     }
 }
 
-struct LintCollector<'a> {
+struct LintCollector<'a, 'tcx: 'a> {
     output: &'a mut HashSet<Name>,
+    cx: &'a LateContext<'a, 'tcx>,
 }
 
-impl<'v, 'a: 'v> Visitor<'v> for LintCollector<'a> {
-    fn visit_expr(&mut self, expr: &'v Expr) {
+impl<'a, 'tcx: 'a> Visitor<'tcx> for LintCollector<'a, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr) {
         walk_expr(self, expr);
     }
 
-    fn visit_path(&mut self, path: &'v Path, _: NodeId) {
+    fn visit_path(&mut self, path: &'tcx Path, _: NodeId) {
         if path.segments.len() == 1 {
             self.output.insert(path.segments[0].name);
         }
+    }
+    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+        NestedVisitorMap::All(&self.cx.tcx.map)
     }
 }

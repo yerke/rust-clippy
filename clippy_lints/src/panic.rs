@@ -1,7 +1,7 @@
 use rustc::hir::*;
 use rustc::lint::*;
 use syntax::ast::LitKind;
-use utils::{is_direct_expn_of, match_path, paths, span_lint};
+use utils::{is_direct_expn_of, match_def_path, resolve_node, paths, span_lint};
 
 /// **What it does:** Checks for missing parameters in `panic!`.
 ///
@@ -32,20 +32,20 @@ impl LintPass for Pass {
     }
 }
 
-impl LateLintPass for Pass {
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if_let_chain! {[
             let ExprBlock(ref block) = expr.node,
             let Some(ref ex) = block.expr,
             let ExprCall(ref fun, ref params) = ex.node,
             params.len() == 2,
-            let ExprPath(None, ref path) = fun.node,
-            match_path(path, &paths::BEGIN_PANIC),
+            let ExprPath(ref qpath) = fun.node,
+            match_def_path(cx, resolve_node(cx, qpath, fun.id).def_id(), &paths::BEGIN_PANIC),
             let ExprLit(ref lit) = params[0].node,
             is_direct_expn_of(cx, params[0].span, "panic").is_some(),
             let LitKind::Str(ref string, _) = lit.node,
-            let Some(par) = string.find('{'),
-            string[par..].contains('}')
+            let Some(par) = string.as_str().find('{'),
+            string.as_str()[par..].contains('}')
         ], {
             span_lint(cx, PANIC_PARAMS, params[0].span,
                       "you probably are missing some parameter in your format string");

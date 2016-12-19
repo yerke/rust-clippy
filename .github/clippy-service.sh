@@ -13,7 +13,7 @@ if [ "$TRAVIS_PULL_REQUEST" == "false" ] &&
         -H "Travis-API-Version: 3" \
         -H "Authorization: token $TRAVIS_TOKEN_CLIPPY_SERVICE" \
         -d "{ \"request\": { \"branch\":\"master\" }}" \
-        https://api.travis-ci.org/repo/ligthyear%2Fclippy-service/requests
+        https://api.travis-ci.org/repo/gnunicorn%2Fclippy-service/requests
 
 else
   echo "Ignored"

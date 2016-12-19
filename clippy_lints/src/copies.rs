@@ -3,7 +3,7 @@ use rustc::ty;
 use rustc::hir::*;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use syntax::parse::token::InternedString;
+use syntax::symbol::InternedString;
 use syntax::util::small_vector::SmallVector;
 use utils::{SpanlessEq, SpanlessHash};
 use utils::{get_parent_expr, in_macro, span_lint_and_then, span_note_and_lint, snippet};
@@ -109,8 +109,8 @@ impl LintPass for CopyAndPaste {
     }
 }
 
-impl LateLintPass for CopyAndPaste {
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for CopyAndPaste {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if !in_macro(cx, expr.span) {
             // skip ifs directly in else, it will be checked in the parent if
             if let Some(&Expr { node: ExprIf(_, _, Some(ref else_expr)), .. }) = get_parent_expr(cx, expr) {
@@ -120,8 +120,8 @@ impl LateLintPass for CopyAndPaste {
             }
 
             let (conds, blocks) = if_sequence(expr);
-            lint_same_then_else(cx, blocks.as_slice());
-            lint_same_cond(cx, conds.as_slice());
+            lint_same_then_else(cx, &blocks);
+            lint_same_cond(cx, &conds);
             lint_match_arms(cx, expr);
         }
     }
@@ -201,7 +201,14 @@ fn lint_match_arms(cx: &LateContext, expr: &Expr) {
                 if i.pats.len() == 1 && j.pats.len() == 1 {
                     let lhs = snippet(cx, i.pats[0].span, "<pat1>");
                     let rhs = snippet(cx, j.pats[0].span, "<pat2>");
-                    db.span_note(i.body.span, &format!("consider refactoring into `{} | {}`", lhs, rhs));
+
+                    if let PatKind::Wild = j.pats[0].node {
+                        // if the last arm is _, then i could be integrated into _
+                        // note that i.pats[0] cannot be _, because that would mean that we're hiding all the subsequent arms, and rust won't compile
+                        db.span_note(i.body.span, &format!("`{}` has the same arm body as the `_` wildcard, consider removing it`", lhs));
+                    } else {
+                        db.span_note(i.body.span, &format!("consider refactoring into `{} | {}`", lhs, rhs));
+                    }
                 }
             });
         }
@@ -212,8 +219,8 @@ fn lint_match_arms(cx: &LateContext, expr: &Expr) {
 /// Eg. would return `([a, b], [c, d, e])` for the expression
 /// `if a { c } else if b { d } else { e }`.
 fn if_sequence(mut expr: &Expr) -> (SmallVector<&Expr>, SmallVector<&Block>) {
-    let mut conds = SmallVector::zero();
-    let mut blocks = SmallVector::zero();
+    let mut conds = SmallVector::new();
+    let mut blocks = SmallVector::new();
 
     while let ExprIf(ref cond, ref then_block, ref else_expr) = expr.node {
         conds.push(&**cond);
@@ -247,9 +254,9 @@ fn bindings<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, pat: &Pat) -> HashMap<Interned
                     bindings_impl(cx, pat, map);
                 }
             }
-            PatKind::Binding(_, ref ident, ref as_pat) => {
+            PatKind::Binding(_, _, ref ident, ref as_pat) => {
                 if let Entry::Vacant(v) = map.entry(ident.node.as_str()) {
-                    v.insert(cx.tcx.pat_ty(pat));
+                    v.insert(cx.tcx.tables().pat_ty(pat));
                 }
                 if let Some(ref as_pat) = *as_pat {
                     bindings_impl(cx, as_pat, map);

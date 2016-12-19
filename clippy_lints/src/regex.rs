@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use syntax::ast::{LitKind, NodeId};
 use syntax::codemap::{Span, BytePos};
-use syntax::parse::token::InternedString;
+use syntax::symbol::InternedString;
 use utils::{is_expn_of, match_def_path, match_type, paths, span_lint, span_help_and_lint};
 
 /// **What it does:** Checks [regex] creation (with `Regex::new`,
@@ -82,16 +82,16 @@ impl LintPass for Pass {
     }
 }
 
-impl LateLintPass for Pass {
-    fn check_crate(&mut self, _: &LateContext, _: &Crate) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
+    fn check_crate(&mut self, _: &LateContext<'a, 'tcx>, _: &'tcx Crate) {
         self.spans.clear();
     }
 
-    fn check_block(&mut self, cx: &LateContext, block: &Block) {
+    fn check_block(&mut self, cx: &LateContext<'a, 'tcx>, block: &'tcx Block) {
         if_let_chain!{[
             self.last.is_none(),
             let Some(ref expr) = block.expr,
-            match_type(cx, cx.tcx.expr_ty(expr), &paths::REGEX),
+            match_type(cx, cx.tcx.tables().expr_ty(expr), &paths::REGEX),
             let Some(span) = is_expn_of(cx, expr.span, "regex"),
         ], {
             if !self.spans.contains(&span) {
@@ -106,19 +106,19 @@ impl LateLintPass for Pass {
         }}
     }
 
-    fn check_block_post(&mut self, _: &LateContext, block: &Block) {
+    fn check_block_post(&mut self, _: &LateContext<'a, 'tcx>, block: &'tcx Block) {
         if self.last.map_or(false, |id| block.id == id) {
             self.last = None;
         }
     }
 
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if_let_chain!{[
             let ExprCall(ref fun, ref args) = expr.node,
+            let ExprPath(ref qpath) = fun.node,
             args.len() == 1,
-            let Some(def) = cx.tcx.def_map.borrow().get(&fun.id),
         ], {
-            let def_id = def.full_def().def_id();
+            let def_id = cx.tcx.tables().qpath_def(qpath, fun.id).def_id();
             if match_def_path(cx, def_id, &paths::REGEX_NEW) ||
                match_def_path(cx, def_id, &paths::REGEX_BUILDER_NEW) {
                 check_regex(cx, &args[0], true);
@@ -203,6 +203,7 @@ fn check_regex(cx: &LateContext, expr: &Expr, utf8: bool) {
 
     if let ExprLit(ref lit) = expr.node {
         if let LitKind::Str(ref r, _) = lit.node {
+            let r = &*r.as_str();
             match builder.parse(r) {
                 Ok(r) => {
                     if let Some(repl) = is_trivial_regex(&r) {

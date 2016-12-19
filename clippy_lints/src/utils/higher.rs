@@ -5,8 +5,7 @@
 use rustc::hir;
 use rustc::lint::LateContext;
 use syntax::ast;
-use syntax::ptr::P;
-use utils::{is_expn_of, match_path, paths};
+use utils::{is_expn_of, match_path, match_def_path, resolve_node, paths};
 
 /// Convert a hir binary operator to the corresponding `ast` type.
 pub fn binop(op: hir::BinOp_) -> ast::BinOpKind {
@@ -45,34 +44,21 @@ pub struct Range<'a> {
 
 /// Higher a `hir` range to something similar to `ast::ExprKind::Range`.
 pub fn range(expr: &hir::Expr) -> Option<Range> {
-    /// Skip unstable blocks. To be removed when ranges get stable.
-    fn unwrap_unstable(expr: &hir::Expr) -> &hir::Expr {
-        if let hir::ExprBlock(ref block) = expr.node {
-            if block.rules == hir::BlockCheckMode::PushUnstableBlock || block.rules == hir::BlockCheckMode::PopUnstableBlock {
-                if let Some(ref expr) = block.expr {
-                    return expr;
-                }
-            }
-        }
-
-        expr
-    }
-
     /// Find the field named `name` in the field. Always return `Some` for convenience.
     fn get_field<'a>(name: &str, fields: &'a [hir::Field]) -> Option<&'a hir::Expr> {
         let expr = &fields.iter()
-                          .find(|field| field.name.node.as_str() == name)
+                          .find(|field| field.name.node == name)
                           .unwrap_or_else(|| panic!("missing {} field for range", name))
                           .expr;
 
-        Some(unwrap_unstable(expr))
+        Some(expr)
     }
 
     // The range syntax is expanded to literal paths starting with `core` or `std` depending on
     // `#[no_std]`. Testing both instead of resolving the paths.
 
-    match unwrap_unstable(expr).node {
-        hir::ExprPath(None, ref path) => {
+    match expr.node {
+        hir::ExprPath(ref path) => {
             if match_path(path, &paths::RANGE_FULL_STD) || match_path(path, &paths::RANGE_FULL) {
                 Some(Range {
                     start: None,
@@ -142,7 +128,7 @@ pub fn for_loop(expr: &hir::Expr) -> Option<(&hir::Pat, &hir::Expr, &hir::Expr)>
         let hir::ExprMatch(ref iterexpr, ref arms, _) = expr.node,
         let hir::ExprCall(_, ref iterargs) = iterexpr.node,
         iterargs.len() == 1 && arms.len() == 1 && arms[0].guard.is_none(),
-        let hir::ExprLoop(ref block, _) = arms[0].body.node,
+        let hir::ExprLoop(ref block, _, _) = arms[0].body.node,
         block.stmts.is_empty(),
         let Some(ref loopexpr) = block.expr,
         let hir::ExprMatch(_, ref innerarms, hir::MatchSource::ForLoopDesugar) = loopexpr.node,
@@ -160,23 +146,24 @@ pub fn for_loop(expr: &hir::Expr) -> Option<(&hir::Pat, &hir::Expr, &hir::Expr)>
 /// Represent the pre-expansion arguments of a `vec!` invocation.
 pub enum VecArgs<'a> {
     /// `vec![elem; len]`
-    Repeat(&'a P<hir::Expr>, &'a P<hir::Expr>),
+    Repeat(&'a hir::Expr, &'a hir::Expr),
     /// `vec![a, b, c]`
-    Vec(&'a [P<hir::Expr>]),
+    Vec(&'a [hir::Expr]),
 }
 
 /// Returns the arguments of the `vec!` macro if this expression was expanded from `vec!`.
 pub fn vec_macro<'e>(cx: &LateContext, expr: &'e hir::Expr) -> Option<VecArgs<'e>> {
     if_let_chain!{[
         let hir::ExprCall(ref fun, ref args) = expr.node,
-        let hir::ExprPath(_, ref path) = fun.node,
-        is_expn_of(cx, fun.span, "vec").is_some()
+        let hir::ExprPath(ref path) = fun.node,
+        is_expn_of(cx, fun.span, "vec").is_some(),
     ], {
-        return if match_path(path, &paths::VEC_FROM_ELEM) && args.len() == 2 {
+        let fun_def = resolve_node(cx, path, fun.id);
+        return if match_def_path(cx, fun_def.def_id(), &paths::VEC_FROM_ELEM) && args.len() == 2 {
             // `vec![elem; size]` case
             Some(VecArgs::Repeat(&args[0], &args[1]))
         }
-        else if match_path(path, &["into_vec"]) && args.len() == 1 {
+        else if match_def_path(cx, fun_def.def_id(), &paths::SLICE_INTO_VEC) && args.len() == 1 {
             // `vec![a, b, c]` case
             if_let_chain!{[
                 let hir::ExprBox(ref boxed) = args[0].node,

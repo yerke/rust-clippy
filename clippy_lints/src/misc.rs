@@ -8,10 +8,9 @@ use rustc_const_eval::EvalHint::ExprTypeChecked;
 use rustc_const_eval::eval_const_expr_partial;
 use rustc_const_math::ConstFloat;
 use syntax::codemap::{Span, Spanned, ExpnFormat};
-use syntax::ptr::P;
 use utils::{
     get_item_name, get_parent_expr, implements_trait, in_macro, is_integer_literal, match_path,
-    snippet, span_lint, span_lint_and_then, walk_ptrs_ty
+    snippet, span_lint, span_lint_and_then, walk_ptrs_ty, last_path_segment
 };
 use utils::sugg::Sugg;
 
@@ -167,14 +166,14 @@ impl LintPass for Pass {
     }
 }
 
-impl LateLintPass for Pass {
-    fn check_fn(&mut self, cx: &LateContext, k: FnKind, decl: &FnDecl, _: &Block, _: Span, _: NodeId) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
+    fn check_fn(&mut self, cx: &LateContext<'a, 'tcx>, k: FnKind<'tcx>, decl: &'tcx FnDecl, _: &'tcx Expr, _: Span, _: NodeId) {
         if let FnKind::Closure(_) = k {
             // Does not apply to closures
             return;
         }
         for arg in &decl.inputs {
-            if let PatKind::Binding(BindByRef(_), _, _) = arg.pat.node {
+            if let PatKind::Binding(BindByRef(_), _, _, _) = arg.pat.node {
                 span_lint(cx,
                           TOPLEVEL_REF_ARG,
                           arg.pat.span,
@@ -183,11 +182,11 @@ impl LateLintPass for Pass {
         }
     }
 
-    fn check_stmt(&mut self, cx: &LateContext, s: &Stmt) {
+    fn check_stmt(&mut self, cx: &LateContext<'a, 'tcx>, s: &'tcx Stmt) {
         if_let_chain! {[
             let StmtDecl(ref d, _) = s.node,
             let DeclLocal(ref l) = d.node,
-            let PatKind::Binding(BindByRef(mt), i, None) = l.pat.node,
+            let PatKind::Binding(BindByRef(mt), _, i, None) = l.pat.node,
             let Some(ref init) = l.init
         ], {
             let init = Sugg::hir(cx, init, "..");
@@ -217,14 +216,14 @@ impl LateLintPass for Pass {
         }}
     }
 
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if let ExprBinary(ref cmp, ref left, ref right) = expr.node {
             let op = cmp.node;
             if op.is_comparison() {
-                if let ExprPath(_, ref path) = left.node {
+                if let ExprPath(QPath::Resolved(_, ref path)) = left.node {
                     check_nan(cx, path, expr.span);
                 }
-                if let ExprPath(_, ref path) = right.node {
+                if let ExprPath(QPath::Resolved(_, ref path)) = right.node {
                     check_nan(cx, path, expr.span);
                 }
                 check_to_owned(cx, left, right, true, cmp.span);
@@ -235,7 +234,7 @@ impl LateLintPass for Pass {
                     return;
                 }
                 if let Some(name) = get_item_name(cx, expr) {
-                    let name = name.as_str();
+                    let name = &*name.as_str();
                     if name == "eq" || name == "ne" || name == "is_nan" || name.starts_with("eq_") ||
                         name.ends_with("_eq") {
                         return;
@@ -263,18 +262,14 @@ impl LateLintPass for Pass {
             return;
         }
         let binding = match expr.node {
-            ExprPath(_, ref path) => {
-                let binding = path.segments
-                    .last()
-                    .expect("path should always have at least one segment")
-                    .name
-                    .as_str();
+            ExprPath(ref qpath) => {
+                let binding = last_path_segment(qpath).name.as_str();
                 if binding.starts_with('_') &&
                     !binding.starts_with("__") &&
-                    binding != "_result" && // FIXME: #944
+                    &*binding != "_result" && // FIXME: #944
                     is_used(cx, expr) &&
                     // don't lint if the declaration is in a macro
-                    non_macro_local(cx, &cx.tcx.expect_def(expr.id)) {
+                    non_macro_local(cx, &cx.tcx.tables().qpath_def(qpath, expr.id)) {
                     Some(binding)
                 } else {
                     None
@@ -299,8 +294,8 @@ impl LateLintPass for Pass {
         }
     }
 
-    fn check_pat(&mut self, cx: &LateContext, pat: &Pat) {
-        if let PatKind::Binding(_, ref ident, Some(ref right)) = pat.node {
+    fn check_pat(&mut self, cx: &LateContext<'a, 'tcx>, pat: &'tcx Pat) {
+        if let PatKind::Binding(_, _, ref ident, Some(ref right)) = pat.node {
             if right.node == PatKind::Wild {
                 span_lint(cx,
                           REDUNDANT_PATTERN,
@@ -315,7 +310,7 @@ impl LateLintPass for Pass {
 
 fn check_nan(cx: &LateContext, path: &Path, span: Span) {
     path.segments.last().map(|seg| {
-        if seg.name.as_str() == "NAN" {
+        if &*seg.name.as_str() == "NAN" {
             span_lint(cx,
                       CMP_NAN,
                       span,
@@ -353,22 +348,23 @@ fn is_allowed(cx: &LateContext, expr: &Expr) -> bool {
 }
 
 fn is_float(cx: &LateContext, expr: &Expr) -> bool {
-    matches!(walk_ptrs_ty(cx.tcx.expr_ty(expr)).sty, ty::TyFloat(_))
+    matches!(walk_ptrs_ty(cx.tcx.tables().expr_ty(expr)).sty, ty::TyFloat(_))
 }
 
 fn check_to_owned(cx: &LateContext, expr: &Expr, other: &Expr, left: bool, op: Span) {
     let (arg_ty, snip) = match expr.node {
         ExprMethodCall(Spanned { node: ref name, .. }, _, ref args) if args.len() == 1 => {
-            if name.as_str() == "to_string" || name.as_str() == "to_owned" && is_str_arg(cx, args) {
-                (cx.tcx.expr_ty(&args[0]), snippet(cx, args[0].span, ".."))
+            let name = &*name.as_str();
+            if name == "to_string" || name == "to_owned" && is_str_arg(cx, args) {
+                (cx.tcx.tables().expr_ty(&args[0]), snippet(cx, args[0].span, ".."))
             } else {
                 return;
             }
         }
         ExprCall(ref path, ref v) if v.len() == 1 => {
-            if let ExprPath(None, ref path) = path.node {
+            if let ExprPath(ref path) = path.node {
                 if match_path(path, &["String", "from_str"]) || match_path(path, &["String", "from"]) {
-                    (cx.tcx.expr_ty(&v[0]), snippet(cx, v[0].span, ".."))
+                    (cx.tcx.tables().expr_ty(&v[0]), snippet(cx, v[0].span, ".."))
                 } else {
                     return;
                 }
@@ -379,7 +375,7 @@ fn check_to_owned(cx: &LateContext, expr: &Expr, other: &Expr, left: bool, op: S
         _ => return,
     };
 
-    let other_ty = cx.tcx.expr_ty(other);
+    let other_ty = cx.tcx.tables().expr_ty(other);
     let partial_eq_trait_id = match cx.tcx.lang_items.eq_trait() {
         Some(id) => id,
         None => return,
@@ -411,9 +407,9 @@ fn check_to_owned(cx: &LateContext, expr: &Expr, other: &Expr, left: bool, op: S
 
 }
 
-fn is_str_arg(cx: &LateContext, args: &[P<Expr>]) -> bool {
+fn is_str_arg(cx: &LateContext, args: &[Expr]) -> bool {
     args.len() == 1 &&
-        matches!(walk_ptrs_ty(cx.tcx.expr_ty(&args[0])).sty, ty::TyStr)
+        matches!(walk_ptrs_ty(cx.tcx.tables().expr_ty(&args[0])).sty, ty::TyStr)
 }
 
 /// Heuristic to see if an expression is used. Should be compatible with `unused_variables`'s idea
@@ -444,9 +440,7 @@ fn in_attributes_expansion(cx: &LateContext, expr: &Expr) -> bool {
 fn non_macro_local(cx: &LateContext, def: &def::Def) -> bool {
     match *def {
         def::Def::Local(id) | def::Def::Upvar(id, _, _) => {
-            let id = cx.tcx.map.as_local_node_id(id).expect("That DefId should be valid");
-
-            if let Some(span) = cx.tcx.map.opt_span(id) {
+            if let Some(span) = cx.tcx.map.span_if_local(id) {
                 !in_macro(cx, span)
             } else {
                 true

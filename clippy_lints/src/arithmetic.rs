@@ -47,9 +47,9 @@ impl LintPass for Arithmetic {
     }
 }
 
-impl LateLintPass for Arithmetic {
-    fn check_expr(&mut self, cx: &LateContext, expr: &hir::Expr) {
-        if let Some(_) = self.span {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Arithmetic {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx hir::Expr) {
+        if self.span.is_some() {
             return;
         }
         match expr.node {
@@ -59,7 +59,7 @@ impl LateLintPass for Arithmetic {
                     hir::BiShr | hir::BiEq | hir::BiLt | hir::BiLe | hir::BiNe | hir::BiGe | hir::BiGt => return,
                     _ => (),
                 }
-                let (l_ty, r_ty) = (cx.tcx.expr_ty(l), cx.tcx.expr_ty(r));
+                let (l_ty, r_ty) = (cx.tcx.tables().expr_ty(l), cx.tcx.tables().expr_ty(r));
                 if l_ty.is_integral() && r_ty.is_integral() {
                     span_lint(cx, INTEGER_ARITHMETIC, expr.span, "integer arithmetic detected");
                     self.span = Some(expr.span);
@@ -69,7 +69,7 @@ impl LateLintPass for Arithmetic {
                 }
             }
             hir::ExprUnary(hir::UnOp::UnNeg, ref arg) => {
-                let ty = cx.tcx.expr_ty(arg);
+                let ty = cx.tcx.tables().expr_ty(arg);
                 if ty.is_integral() {
                     span_lint(cx, INTEGER_ARITHMETIC, expr.span, "integer arithmetic detected");
                     self.span = Some(expr.span);
@@ -82,7 +82,7 @@ impl LateLintPass for Arithmetic {
         }
     }
 
-    fn check_expr_post(&mut self, _: &LateContext, expr: &hir::Expr) {
+    fn check_expr_post(&mut self, _: &LateContext<'a, 'tcx>, expr: &'tcx hir::Expr) {
         if Some(expr.span) == self.span {
             self.span = None;
         }

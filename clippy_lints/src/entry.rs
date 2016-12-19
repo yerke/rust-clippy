@@ -1,5 +1,5 @@
 use rustc::hir::*;
-use rustc::hir::intravisit::{Visitor, walk_expr, walk_block};
+use rustc::hir::intravisit::{Visitor, walk_expr, walk_block, NestedVisitorMap};
 use rustc::lint::*;
 use syntax::codemap::Span;
 use utils::SpanlessEq;
@@ -39,8 +39,8 @@ impl LintPass for HashMapLint {
     }
 }
 
-impl LateLintPass for HashMapLint {
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for HashMapLint {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         if let ExprIf(ref check, ref then_block, ref else_block) = expr.node {
             if let ExprUnary(UnOp::UnNot, ref check) = check.node {
                 if let Some((ty, map, key)) = check_cond(cx, check) {
@@ -82,11 +82,11 @@ fn check_cond<'a, 'tcx, 'b>(cx: &'a LateContext<'a, 'tcx>, check: &'b Expr) -> O
     if_let_chain! {[
         let ExprMethodCall(ref name, _, ref params) = check.node,
         params.len() >= 2,
-        name.node.as_str() == "contains_key",
+        &*name.node.as_str() == "contains_key",
         let ExprAddrOf(_, ref key) = params[1].node
     ], {
         let map = &params[0];
-        let obj_ty = walk_ptrs_ty(cx.tcx.expr_ty(map));
+        let obj_ty = walk_ptrs_ty(cx.tcx.tables().expr_ty(map));
 
         return if match_type(cx, obj_ty, &paths::BTREEMAP) {
             Some(("BTreeMap", map, key))
@@ -111,13 +111,13 @@ struct InsertVisitor<'a, 'tcx: 'a, 'b> {
     sole_expr: bool,
 }
 
-impl<'a, 'tcx, 'v, 'b> Visitor<'v> for InsertVisitor<'a, 'tcx, 'b> {
-    fn visit_expr(&mut self, expr: &'v Expr) {
+impl<'a, 'tcx, 'b> Visitor<'tcx> for InsertVisitor<'a, 'tcx, 'b> {
+    fn visit_expr(&mut self, expr: &'tcx Expr) {
         if_let_chain! {[
             let ExprMethodCall(ref name, _, ref params) = expr.node,
             params.len() == 3,
-            name.node.as_str() == "insert",
-            get_item_name(self.cx, self.map) == get_item_name(self.cx, &*params[0]),
+            &*name.node.as_str() == "insert",
+            get_item_name(self.cx, self.map) == get_item_name(self.cx, &params[0]),
             SpanlessEq::new(self.cx).eq_expr(self.key, &params[1])
         ], {
             span_lint_and_then(self.cx, MAP_ENTRY, self.span,
@@ -143,5 +143,8 @@ impl<'a, 'tcx, 'v, 'b> Visitor<'v> for InsertVisitor<'a, 'tcx, 'b> {
         if !self.sole_expr {
             walk_expr(self, expr);
         }
+    }
+    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+        NestedVisitorMap::All(&self.cx.tcx.map)
     }
 }

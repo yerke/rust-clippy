@@ -1,5 +1,5 @@
 use rustc::lint::{LateContext, LateLintPass, LintArray, LintPass};
-use rustc::hir::def::{Def, PathResolution};
+use rustc::hir::def::Def;
 use rustc::hir::{Expr, Expr_, Stmt, StmtSemi, BlockCheckMode, UnsafeSource};
 use utils::{in_macro, span_lint, snippet_opt, span_lint_and_then};
 use std::ops::Deref;
@@ -68,11 +68,17 @@ fn has_no_effect(cx: &LateContext, expr: &Expr) -> bool {
             }
         }
         Expr_::ExprCall(ref callee, ref args) => {
-            let def = cx.tcx.def_map.borrow().get(&callee.id).map(|d| d.full_def());
-            match def {
-                Some(Def::Struct(..)) |
-                Some(Def::Variant(..)) => args.iter().all(|arg| has_no_effect(cx, arg)),
-                _ => false,
+            if let Expr_::ExprPath(ref qpath) = callee.node {
+                let def = cx.tcx.tables().qpath_def(qpath, callee.id);
+                match def {
+                    Def::Struct(..) |
+                    Def::Variant(..) |
+                    Def::StructCtor(..) |
+                    Def::VariantCtor(..) => args.iter().all(|arg| has_no_effect(cx, arg)),
+                    _ => false,
+                }
+            } else {
+                false
             }
         }
         Expr_::ExprBlock(ref block) => {
@@ -96,8 +102,8 @@ impl LintPass for Pass {
     }
 }
 
-impl LateLintPass for Pass {
-    fn check_stmt(&mut self, cx: &LateContext, stmt: &Stmt) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
+    fn check_stmt(&mut self, cx: &LateContext<'a, 'tcx>, stmt: &'tcx Stmt) {
         if let StmtSemi(ref expr, _) = stmt.node {
             if has_no_effect(cx, expr) {
                 span_lint(cx, NO_EFFECT, stmt.span, "statement with no effect");
@@ -131,7 +137,7 @@ fn reduce_expression<'a>(cx: &LateContext, expr: &'a Expr) -> Option<Vec<&'a Exp
         Expr_::ExprIndex(ref a, ref b) |
         Expr_::ExprBinary(_, ref a, ref b) => Some(vec![&**a, &**b]),
         Expr_::ExprArray(ref v) |
-        Expr_::ExprTup(ref v) => Some(v.iter().map(Deref::deref).collect()),
+        Expr_::ExprTup(ref v) => Some(v.iter().collect()),
         Expr_::ExprRepeat(ref inner, _) |
         Expr_::ExprCast(ref inner, _) |
         Expr_::ExprType(ref inner, _) |
@@ -144,10 +150,17 @@ fn reduce_expression<'a>(cx: &LateContext, expr: &'a Expr) -> Option<Vec<&'a Exp
             Some(fields.iter().map(|f| &f.expr).chain(base).map(Deref::deref).collect())
         }
         Expr_::ExprCall(ref callee, ref args) => {
-            match cx.tcx.def_map.borrow().get(&callee.id).map(PathResolution::full_def) {
-                Some(Def::Struct(..)) |
-                Some(Def::Variant(..)) => Some(args.iter().map(Deref::deref).collect()),
-                _ => None,
+            if let Expr_::ExprPath(ref qpath) = callee.node {
+                let def = cx.tcx.tables().qpath_def(qpath, callee.id);
+                match def {
+                    Def::Struct(..) |
+                    Def::Variant(..) |
+                    Def::StructCtor(..) |
+                    Def::VariantCtor(..) => Some(args.iter().collect()),
+                    _ => None,
+                }
+            } else {
+                None
             }
         }
         Expr_::ExprBlock(ref block) => {

@@ -27,8 +27,8 @@ impl LintPass for Pass {
     }
 }
 
-impl LateLintPass for Pass {
-    fn check_expr(&mut self, cx: &LateContext, expr: &Expr) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
+    fn check_expr(&mut self, cx: &LateContext<'a, 'tcx>, expr: &'tcx Expr) {
         // check for instances of 0.0/0.0
         if_let_chain! {[
             let ExprBinary(ref op, ref left, ref right) = expr.node,
@@ -38,8 +38,8 @@ impl LateLintPass for Pass {
             // do something like 0.0/(2.0 - 2.0), but it would be nice to warn on that case too.
             let Some(Constant::Float(ref lhs_value, lhs_width)) = constant_simple(left),
             let Some(Constant::Float(ref rhs_value, rhs_width)) = constant_simple(right),
-            let Some(0.0) = lhs_value.parse().ok(),
-            let Some(0.0) = rhs_value.parse().ok()
+            let Ok(0.0) = lhs_value.parse(),
+            let Ok(0.0) = rhs_value.parse()
         ], {
             // since we're about to suggest a use of std::f32::NaN or std::f64::NaN,
             // match the precision of the literals that are given.

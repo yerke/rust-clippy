@@ -3,10 +3,9 @@ use rustc::ty::subst::Subst;
 use rustc::ty::TypeVariants;
 use rustc::ty;
 use rustc::hir::*;
-use syntax::ast::{Attribute, MetaItemKind};
 use syntax::codemap::Span;
 use utils::paths;
-use utils::{match_path, span_lint_and_then};
+use utils::{is_automatically_derived, span_lint_and_then, match_path_old};
 
 /// **What it does:** Checks for deriving `Hash` but implementing `PartialEq`
 /// explicitly.
@@ -71,11 +70,11 @@ impl LintPass for Derive {
     }
 }
 
-impl LateLintPass for Derive {
-    fn check_item(&mut self, cx: &LateContext, item: &Item) {
+impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Derive {
+    fn check_item(&mut self, cx: &LateContext<'a, 'tcx>, item: &'tcx Item) {
         if let ItemImpl(_, _, _, Some(ref trait_ref), _, _) = item.node {
-            let ty = cx.tcx.lookup_item_type(cx.tcx.map.local_def_id(item.id)).ty;
-            let is_automatically_derived = item.attrs.iter().any(is_automatically_derived);
+            let ty = cx.tcx.item_type(cx.tcx.map.local_def_id(item.id));
+            let is_automatically_derived = is_automatically_derived(&*item.attrs);
 
             check_hash_peq(cx, item.span, trait_ref, ty, is_automatically_derived);
 
@@ -87,17 +86,17 @@ impl LateLintPass for Derive {
 }
 
 /// Implementation of the `DERIVE_HASH_XOR_EQ` lint.
-fn check_hash_peq<'a, 'tcx: 'a>(cx: &LateContext<'a, 'tcx>, span: Span, trait_ref: &TraitRef, ty: ty::Ty<'tcx>,
+fn check_hash_peq<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, span: Span, trait_ref: &TraitRef, ty: ty::Ty<'tcx>,
                                 hash_is_automatically_derived: bool) {
     if_let_chain! {[
-        match_path(&trait_ref.path, &paths::HASH),
+        match_path_old(&trait_ref.path, &paths::HASH),
         let Some(peq_trait_def_id) = cx.tcx.lang_items.eq_trait()
     ], {
         let peq_trait_def = cx.tcx.lookup_trait_def(peq_trait_def_id);
 
         // Look for the PartialEq implementations for `ty`
         peq_trait_def.for_each_relevant_impl(cx.tcx, ty, |impl_id| {
-            let peq_is_automatically_derived = cx.tcx.get_attrs(impl_id).iter().any(is_automatically_derived);
+            let peq_is_automatically_derived = is_automatically_derived(&cx.tcx.get_attrs(impl_id));
 
             if peq_is_automatically_derived == hash_is_automatically_derived {
                 return;
@@ -132,7 +131,7 @@ fn check_hash_peq<'a, 'tcx: 'a>(cx: &LateContext<'a, 'tcx>, span: Span, trait_re
 
 /// Implementation of the `EXPL_IMPL_CLONE_ON_COPY` lint.
 fn check_copy_clone<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, item: &Item, trait_ref: &TraitRef, ty: ty::Ty<'tcx>) {
-    if match_path(&trait_ref.path, &paths::CLONE_TRAIT) {
+    if match_path_old(&trait_ref.path, &paths::CLONE_TRAIT) {
         let parameter_environment = ty::ParameterEnvironment::for_item(cx.tcx, item.id);
         let subst_ty = ty.subst(cx.tcx, parameter_environment.free_substs);
 
@@ -172,14 +171,5 @@ fn check_copy_clone<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, item: &Item, trait_ref
                            |db| {
                                db.span_note(item.span, "consider deriving `Clone` or removing `Copy`");
                            });
-    }
-}
-
-/// Checks for the `#[automatically_derived]` attribute all `#[derive]`d implementations have.
-fn is_automatically_derived(attr: &Attribute) -> bool {
-    if let MetaItemKind::Word(ref word) = attr.node.value.node {
-        word == &"automatically_derived"
-    } else {
-        false
     }
 }
