@@ -8,9 +8,9 @@ use std::iter;
 use syntax::ast;
 use syntax::codemap::{Span, BytePos};
 use crate::utils::{get_arg_name, get_trait_def_id, implements_trait, in_external_macro, in_macro, is_copy, is_expn_of, is_self,
-            is_self_ty, iter_input_pats, last_path_segment, match_def_path, match_path, match_qpath, match_trait_method,
+            iter_input_pats, last_path_segment, match_def_path, match_qpath, match_trait_method, path_to_def,
             match_type, method_chain_args, match_var, return_ty, remove_blocks, same_tys, single_segment_path, snippet,
-            span_lint, span_lint_and_sugg, span_lint_and_then, span_note_and_lint, walk_ptrs_ty, walk_ptrs_ty_depth, SpanlessEq};
+            span_lint, span_lint_and_sugg, span_lint_and_then, span_note_and_lint, walk_ptrs_ty, walk_ptrs_ty_depth};
 use crate::utils::paths;
 use crate::utils::sugg;
 use crate::consts::{constant, Constant};
@@ -811,17 +811,21 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
         let item = cx.tcx.hir.expect_item(parent);
         if_chain! {
             if let hir::ImplItemKind::Method(ref sig, id) = implitem.node;
-            if let Some(first_arg_ty) = sig.decl.inputs.get(0);
+            let fn_did = cx.tcx.hir.local_def_id(implitem.id);
+            let fn_sig = cx.tcx.fn_sig(fn_did);
+            if let Some(first_arg_ty) = fn_sig.inputs().map_bound(|inputs| inputs.get(0).cloned()).skip_binder();
             if let Some(first_arg) = iter_input_pats(&sig.decl, cx.tcx.hir.body(id)).next();
-            if let hir::ItemImpl(_, _, _, _, None, ref self_ty, _) = item.node;
+            if let hir::ItemImpl(_, _, _, _, None, _, _) = item.node;
             then {
+                let parent_did = cx.tcx.hir.local_def_id(item.id);
+                let self_ty = cx.tcx.type_of(parent_did);
                 if cx.access_levels.is_exported(implitem.id) {
-                // check missing trait implementations
+                    // check missing trait implementations
                     for &(method_name, n_args, self_kind, out_type, trait_name) in &TRAIT_METHODS {
                         if name == method_name &&
                         sig.decl.inputs.len() == n_args &&
-                        out_type.matches(cx, &sig.decl.output) &&
-                        self_kind.matches(cx, first_arg_ty, first_arg, self_ty, false, &implitem.generics) {
+                        out_type.matches(fn_sig.output().skip_binder()) &&
+                        self_kind.matches(cx, first_arg_ty, first_arg, self_ty, false) {
                             span_lint(cx, SHOULD_IMPLEMENT_TRAIT, implitem.span, &format!(
                                 "defining a method called `{}` on this type; consider implementing \
                                 the `{}` trait or choosing a less ambiguous name", name, trait_name));
@@ -830,15 +834,13 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
                 }
 
                 // check conventions w.r.t. conversion method names and predicates
-                let def_id = cx.tcx.hir.local_def_id(item.id);
-                let ty = cx.tcx.type_of(def_id);
-                let is_copy = is_copy(cx, ty);
+                let is_copy = is_copy(cx, self_ty);
                 for &(ref conv, self_kinds) in &CONVENTIONS {
                     if_chain! {
                         if conv.check(&name.as_str());
                         if !self_kinds
                             .iter()
-                            .any(|k| k.matches(cx, first_arg_ty, first_arg, self_ty, is_copy, &implitem.generics));
+                            .any(|k| k.matches(cx, first_arg_ty, first_arg, self_ty, is_copy));
                         then {
                             let lint = if item.vis.node.is_pub() {
                                 WRONG_PUB_SELF_CONVENTION
@@ -861,7 +863,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Pass {
 
                 let ret_ty = return_ty(cx, implitem.id);
                 if name == "new" &&
-                   !ret_ty.walk().any(|t| same_tys(cx, t, ty)) {
+                   !ret_ty.walk().any(|t| same_tys(cx, t, self_ty)) {
                     span_lint(cx,
                               NEW_RET_NO_SELF,
                               implitem.span,
@@ -2030,12 +2032,11 @@ enum SelfKind {
 impl SelfKind {
     fn matches(
         self,
-        cx: &LateContext,
-        ty: &hir::Ty,
+        cx: &LateContext<'a, 'tcx>,
+        ty: ty::Ty<'tcx>,
         arg: &hir::Arg,
-        self_ty: &hir::Ty,
+        self_ty: ty::Ty<'tcx>,
         allow_value_for_ref: bool,
-        generics: &hir::Generics,
     ) -> bool {
         // Self types in the HIR are desugared to explicit self types. So it will
         // always be `self:
@@ -2048,33 +2049,24 @@ impl SelfKind {
         // `Self`, `&mut Self`,
         // and `Box<Self>`, including the equivalent types with `Foo`.
 
-        let is_actually_self = |ty| is_self_ty(ty) || SpanlessEq::new(cx).eq_ty(ty, self_ty);
         if is_self(arg) {
             match self {
-                SelfKind::Value => is_actually_self(ty),
+                SelfKind::Value => ty == self_ty,
                 SelfKind::Ref | SelfKind::RefMut => {
-                    if allow_value_for_ref && is_actually_self(ty) {
-                        return true;
-                    }
-                    match ty.node {
-                        hir::TyRptr(_, ref mt_ty) => {
-                            let mutability_match = if self == SelfKind::Ref {
-                                mt_ty.mutbl == hir::MutImmutable
-                            } else {
-                                mt_ty.mutbl == hir::MutMutable
-                            };
-                            is_actually_self(&mt_ty.ty) && mutability_match
-                        },
-                        _ => false,
-                    }
+                    let mutbl = if self == SelfKind::Ref {
+                        hir::MutImmutable
+                    } else {
+                        hir::MutMutable
+                    };
+                    allow_value_for_ref || ty.builtin_deref(true).map_or(false, |tam| tam.mutbl == mutbl && tam.ty == self_ty)
                 },
                 _ => false,
             }
         } else {
             match self {
                 SelfKind::Value => false,
-                SelfKind::Ref => is_as_ref_or_mut_trait(ty, self_ty, generics, &paths::ASREF_TRAIT),
-                SelfKind::RefMut => is_as_ref_or_mut_trait(ty, self_ty, generics, &paths::ASMUT_TRAIT),
+                SelfKind::Ref => is_as_ref_or_mut_trait(cx, ty, self_ty, &paths::ASREF_TRAIT),
+                SelfKind::RefMut => is_as_ref_or_mut_trait(cx, ty, self_ty, &paths::ASMUT_TRAIT),
                 SelfKind::No => true,
             }
         }
@@ -2090,60 +2082,13 @@ impl SelfKind {
     }
 }
 
-fn is_as_ref_or_mut_trait(ty: &hir::Ty, self_ty: &hir::Ty, generics: &hir::Generics, name: &[&str]) -> bool {
-    single_segment_ty(ty).map_or(false, |seg| {
-        generics.params.iter().any(|param| match param.kind {
-            hir::GenericParamKind::Type { .. } => {
-                param.name.ident().name == seg.ident.name && param.bounds.iter().any(|bound| {
-                    if let hir::GenericBound::Trait(ref ptr, ..) = *bound {
-                        let path = &ptr.trait_ref.path;
-                        match_path(path, name) && path.segments.last().map_or(false, |s| {
-                            if let Some(ref params) = s.args {
-                                if params.parenthesized {
-                                    false
-                                } else {
-                                    // FIXME(flip1995): messy, improve if there is a better option
-                                    // in the compiler
-                                    let types: Vec<_> = params.args.iter().filter_map(|arg| match arg {
-                                        hir::GenericArg::Type(ty) => Some(ty),
-                                        _ => None,
-                                    }).collect();
-                                    types.len() == 1
-                                        && (is_self_ty(&types[0]) || is_ty(&*types[0], self_ty))
-                                }
-                            } else {
-                                false
-                            }
-                        })
-                    } else {
-                        false
-                    }
-                })
-            },
-            _ => false,
-        })
-    })
-}
-
-fn is_ty(ty: &hir::Ty, self_ty: &hir::Ty) -> bool {
-    match (&ty.node, &self_ty.node) {
-        (
-            &hir::TyPath(hir::QPath::Resolved(_, ref ty_path)),
-            &hir::TyPath(hir::QPath::Resolved(_, ref self_ty_path)),
-        ) => ty_path
-            .segments
-            .iter()
-            .map(|seg| seg.ident.name)
-            .eq(self_ty_path.segments.iter().map(|seg| seg.ident.name)),
-        _ => false,
-    }
-}
-
-fn single_segment_ty(ty: &hir::Ty) -> Option<&hir::PathSegment> {
-    if let hir::TyPath(ref path) = ty.node {
-        single_segment_path(path)
+fn is_as_ref_or_mut_trait(cx: &LateContext<'a, 'tcx>, ty: ty::Ty<'tcx>, self_ty: ty::Ty<'tcx>, name: &[&str]) -> bool {
+    // it's a type parameter
+    if let ty::TyParam(_) = ty.sty {
+        let def = path_to_def(cx, name).unwrap();
+        implements_trait(cx, ty, def.def_id(), &[self_ty.into()])
     } else {
-        None
+        false
     }
 }
 
@@ -2174,23 +2119,14 @@ enum OutType {
 }
 
 impl OutType {
-    fn matches(self, cx: &LateContext, ty: &hir::FunctionRetTy) -> bool {
-        let is_unit = |ty: &hir::Ty| SpanlessEq::new(cx).eq_ty_kind(&ty.node, &hir::TyTup(vec![].into()));
-        match (self, ty) {
-            (OutType::Unit, &hir::DefaultReturn(_)) => true,
-            (OutType::Unit, &hir::Return(ref ty)) if is_unit(ty) => true,
-            (OutType::Bool, &hir::Return(ref ty)) if is_bool(ty) => true,
-            (OutType::Any, &hir::Return(ref ty)) if !is_unit(ty) => true,
-            (OutType::Ref, &hir::Return(ref ty)) => matches!(ty.node, hir::TyRptr(_, _)),
+    fn matches(self, ty: &ty::Ty) -> bool {
+        match (self, &ty.sty) {
+            (OutType::Unit, &ty::TyTuple(ref items)) => items.is_empty(),
+            (OutType::Bool, &ty::TyBool) => true,
+            (OutType::Any, &ty::TyTuple(ref items)) => !items.is_empty(),
+            (OutType::Any, _) => true,
+            (OutType::Ref, &ty::TyRawPtr(_)) => true,
             _ => false,
         }
-    }
-}
-
-fn is_bool(ty: &hir::Ty) -> bool {
-    if let hir::TyPath(ref p) = ty.node {
-        match_qpath(p, &["bool"])
-    } else {
-        false
     }
 }
