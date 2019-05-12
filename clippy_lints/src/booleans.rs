@@ -1,5 +1,6 @@
 use crate::utils::{
-    get_trait_def_id, implements_trait, in_macro, match_type, paths, snippet_opt, span_lint_and_then, SpanlessEq,
+    get_trait_def_id, implements_trait, in_macro, in_macro_not_desugaring, match_type, paths, snippet_opt, span_lint_and_then,
+    SpanlessEq,
 };
 use rustc::hir::intravisit::*;
 use rustc::hir::*;
@@ -441,7 +442,7 @@ impl<'a, 'tcx> NonminimalBoolVisitor<'a, 'tcx> {
 
 impl<'a, 'tcx> Visitor<'tcx> for NonminimalBoolVisitor<'a, 'tcx> {
     fn visit_expr(&mut self, e: &'tcx Expr) {
-        if in_macro(e.span) {
+        if in_macro_not_desugaring(e.span) {
             return;
         }
         match &e.node {

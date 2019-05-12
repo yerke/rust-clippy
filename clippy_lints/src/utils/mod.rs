@@ -89,8 +89,15 @@ pub fn in_constant(cx: &LateContext<'_, '_>, id: HirId) -> bool {
     }
 }
 
-/// Returns `true` if this `expn_info` was expanded by any macro.
+/// Returns `true` if this `expn_info` was expanded by any macro or desugaring
 pub fn in_macro(span: Span) -> bool {
+    span.ctxt().outer().expn_info().is_some()
+}
+
+/// Returns `true` if this `expn_info` was expanded by any macro, but not a desugaring
+///
+/// Useful in visitors where we don't want to bail early while stepping into a desugaring
+pub fn in_macro_not_desugaring(span: Span) -> bool {
     if let Some(info) = span.ctxt().outer().expn_info() {
         if let ExpnFormat::CompilerDesugaring(..) = info.format {
             false
