@@ -32,6 +32,7 @@ url = { version =  "2.1.0", features = ["serde"] } # cargo requires serde feat i
 # see https://github.com/rust-lang/rust/pull/63587#issuecomment-522343864
 if_chain = "1.0.0"
 smallvec = { version = "0.6.5", features = ["union"] }
+syn = { version = "1.0.5", features = ["full"] }
 
 [features]
 debugging = []

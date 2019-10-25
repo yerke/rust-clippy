@@ -10,6 +10,7 @@ use syntax::ast::Attribute;
 use syntax::source_map::{BytePos, Span};
 use syntax_pos::Pos;
 use url::Url;
+use syn::*;
 
 declare_clippy_lint! {
     /// **What it does:** Checks for the presence of `_`, `::` or camel-case words
@@ -73,7 +74,9 @@ declare_clippy_lint! {
     /// **What it does:** Checks for `fn main() { .. }` in doctests
     ///
     /// **Why is this bad?** The test can be shorter (and likely more readable)
-    /// if the `fn main()` is left implicit.
+    /// if the `fn main()` is left implicit. In some cases, you'll need an
+    /// empty `fn main() {}` in your doctest to avoid rustdoc introducing one,
+    /// which is why the line will ignore empty `main` functions.
     ///
     /// **Known problems:** None.
     ///
@@ -86,6 +89,7 @@ declare_clippy_lint! {
     /// /// ```
     /// /// fn main() {
     /// ///     // this needs not be in an `fn`
+    /// ///     unimplemented!();
     /// /// }
     /// /// ```
     /// fn needless_main() {
@@ -344,9 +348,34 @@ fn check_doc<'a, Events: Iterator<Item = (pulldown_cmark::Event<'a>, Range<usize
     safety_header
 }
 
-fn check_code(cx: &LateContext<'_, '_>, text: &str, span: Span) {
-    if text.contains("fn main() {") {
-        span_lint(cx, NEEDLESS_DOCTEST_MAIN, span, "needless `fn main` in doctest");
+// check a syn Item for non-empty `fn main() { .. }`
+fn is_default_main_fn(item: &syn::Item) -> bool {
+    match item {
+        Item::Fn(ItemFn { ref sig, ref block, .. }) => {
+            !block.stmts.is_empty()
+                && sig.ident == "main"
+                && match sig.output {
+                    ReturnType::Default => true,
+                    ReturnType::Type(_, ref ty) => match **ty {
+                        Type::Tuple(TypeTuple { ref elems, .. }) => elems.is_empty(),
+                        _ => false,
+                    },
+                }
+        },
+        _ => false,
+    }
+}
+
+fn check_code(cx: &LateContext<'_, '_>, code: &str, span: Span) {
+    if let Ok(file) = syn::parse_file(code) {
+        if file.items.iter().any(is_default_main_fn) {
+            span_lint(
+                cx,
+                NEEDLESS_DOCTEST_MAIN,
+                span,
+                "needless `fn main() {} in doctest",
+            );
+        }
     }
 }
 
