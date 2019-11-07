@@ -652,6 +652,7 @@ fn combine_branches(b1: NeverLoopResult, b2: NeverLoopResult) -> NeverLoopResult
     }
 }
 
+// copy it?
 fn never_loop_block(block: &Block, main_loop_id: HirId) -> NeverLoopResult {
     let stmts = block.stmts.iter().map(stmt_to_expr);
     let expr = once(block.expr.as_ref().map(|p| &**p));
@@ -687,6 +688,7 @@ fn never_loop_expr(expr: &Expr, main_loop_id: HirId) -> NeverLoopResult {
         | ExprKind::AssignOp(_, ref e1, ref e2)
         | ExprKind::Index(ref e1, ref e2) => never_loop_expr_all(&mut [&**e1, &**e2].iter().cloned(), main_loop_id),
         ExprKind::Loop(ref b, _, _) => {
+            // copy this?
             // Break can come from the inner loop so remove them.
             absorb_break(&never_loop_block(b, main_loop_id))
         },
@@ -710,7 +712,7 @@ fn never_loop_expr(expr: &Expr, main_loop_id: HirId) -> NeverLoopResult {
                 NeverLoopResult::AlwaysBreak
             }
         },
-        ExprKind::Break(_, ref e) | ExprKind::Ret(ref e) => {
+        ExprKind::Break(_, ref e) | ExprKind::Ret(ref e) => { // this is what we are looking for
             if let Some(ref e) = *e {
                 combine_seq(never_loop_expr(e, main_loop_id), NeverLoopResult::AlwaysBreak)
             } else {
@@ -2359,7 +2361,19 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
     // TODO: find breaks and returns here
-    if no_cond_variable_mutated && !mutable_static_in_cond {
+    dbg!(&expr.kind);
+    // call infinite_loop_block here
+    let has_break_or_return = if let ExprKind::Block(ref block, _) = expr.kind {
+        dbg!("Got here");
+        match infinite_loop_block(block, expr.hir_id) {
+            InfiniteLoopResult::MayBreak => true,
+            InfiniteLoopResult::Otherwise => false,
+        }
+    } else {
+        panic!("Expected block here always!");
+    };
+    dbg!(&has_break_or_return);
+    if no_cond_variable_mutated && !mutable_static_in_cond && !has_break_or_return {
         span_lint(
             cx,
             WHILE_IMMUTABLE_CONDITION,
@@ -2368,6 +2382,23 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
              This may lead to an infinite or to a never running loop",
         );
     }
+}
+
+// inspired by never_loop_block()
+fn infinite_loop_block(block: &Block, main_loop_id: HirId) -> InfiniteLoopResult {
+    dbg!(block);
+    dbg!(main_loop_id);
+    InfiniteLoopResult::Otherwise
+//    let stmts = block.stmts.iter().map(stmt_to_expr);
+//    let expr = once(block.expr.as_ref().map(|p| &**p));
+//    let mut iter = stmts.chain(expr).filter_map(|e| e);
+//    never_loop_expr_seq(&mut iter, main_loop_id)
+}
+
+enum InfiniteLoopResult {
+    // Has break/return in the body of the loop
+    MayBreak,
+    Otherwise,
 }
 
 /// Collects the set of variables in an expression
