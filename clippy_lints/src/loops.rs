@@ -2349,15 +2349,16 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     };
     var_visitor.visit_expr(cond);
     if var_visitor.skip {
-        return;
+        return; // condition had function or method call, stop analysis
     }
     let used_in_condition = &var_visitor.ids;
     let no_cond_variable_mutated = if let Some(used_mutably) = mutated_variables(expr, cx) {
         used_in_condition.is_disjoint(&used_mutably)
     } else {
-        return;
+        return; // possibly one of the condition vars was mutated, stop analysis
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
+    // TODO: find breaks and returns here
     if no_cond_variable_mutated && !mutable_static_in_cond {
         span_lint(
             cx,
