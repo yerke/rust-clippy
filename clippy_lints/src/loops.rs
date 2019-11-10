@@ -652,7 +652,6 @@ fn combine_branches(b1: NeverLoopResult, b2: NeverLoopResult) -> NeverLoopResult
     }
 }
 
-// copy it?
 fn never_loop_block(block: &Block, main_loop_id: HirId) -> NeverLoopResult {
     let stmts = block.stmts.iter().map(stmt_to_expr);
     let expr = once(block.expr.as_ref().map(|p| &**p));
@@ -688,7 +687,6 @@ fn never_loop_expr(expr: &Expr, main_loop_id: HirId) -> NeverLoopResult {
         | ExprKind::AssignOp(_, ref e1, ref e2)
         | ExprKind::Index(ref e1, ref e2) => never_loop_expr_all(&mut [&**e1, &**e2].iter().cloned(), main_loop_id),
         ExprKind::Loop(ref b, _, _) => {
-            // copy this?
             // Break can come from the inner loop so remove them.
             absorb_break(&never_loop_block(b, main_loop_id))
         },
@@ -712,7 +710,7 @@ fn never_loop_expr(expr: &Expr, main_loop_id: HirId) -> NeverLoopResult {
                 NeverLoopResult::AlwaysBreak
             }
         },
-        ExprKind::Break(_, ref e) | ExprKind::Ret(ref e) => { // this is what we are looking for
+        ExprKind::Break(_, ref e) | ExprKind::Ret(ref e) => {
             if let Some(ref e) = *e {
                 combine_seq(never_loop_expr(e, main_loop_id), NeverLoopResult::AlwaysBreak)
             } else {
@@ -2386,7 +2384,6 @@ fn infinite_loop_block(block: &Block, main_loop_id: HirId) -> InfiniteLoopResult
     let expr = once(block.expr.as_ref().map(|p| &**p));
     let mut iter = stmts.chain(expr).filter_map(|e| e);
     infinite_loop_expr_seq(&mut iter, main_loop_id)
-//    InfiniteLoopResult::Otherwise
 }
 
 enum InfiniteLoopResult {
@@ -2412,15 +2409,7 @@ fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
         ExprKind::Ret(_) => {
             InfiniteLoopResult::MayBreak
         },
-        ExprKind::Break(d, _) => {
-//            let id = d
-//                .target_id
-//                .expect("target ID can only be missing in the presence of compilation errors");
-//            // I am worried that checking loop_id here is not a good idea
-//            // consider 2 loops (outer and inner)
-//            // if inner loop break into outer loop label, then outer loop will be pass this check
-//            // but the inner loop will not
-//            // TODO: Check main_loop_id
+        ExprKind::Break(_, _) => {
             InfiniteLoopResult::MayBreak
         },
         ExprKind::Box(ref e)
