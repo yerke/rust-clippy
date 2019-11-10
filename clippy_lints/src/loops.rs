@@ -595,6 +595,7 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Loops {
             }
         }
 
+//        dbg!(&expr);
         if let Some((cond, body)) = higher::while_loop(&expr) {
             check_infinite_loop(cx, cond, body);
         }
@@ -2361,10 +2362,10 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
     // TODO: find breaks and returns here
-    dbg!(&expr.kind);
+//    dbg!(&expr.kind);
     // call infinite_loop_block here
     let has_break_or_return = if let ExprKind::Block(ref block, _) = expr.kind {
-        dbg!("Got here");
+//        dbg!("Got here");
         match infinite_loop_block(block, expr.hir_id) {
             InfiniteLoopResult::MayBreak => true,
             InfiniteLoopResult::Otherwise => false,
@@ -2372,7 +2373,7 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     } else {
         panic!("Expected block here always!");
     };
-    dbg!(&has_break_or_return);
+//    dbg!(&has_break_or_return);
     if no_cond_variable_mutated && !mutable_static_in_cond && !has_break_or_return {
         span_lint(
             cx,
@@ -2385,20 +2386,55 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
 }
 
 // inspired by never_loop_block()
+// main_loop_id I get here is not really the one I need to track
 fn infinite_loop_block(block: &Block, main_loop_id: HirId) -> InfiniteLoopResult {
-    dbg!(block);
-    dbg!(main_loop_id);
-    InfiniteLoopResult::Otherwise
-//    let stmts = block.stmts.iter().map(stmt_to_expr);
-//    let expr = once(block.expr.as_ref().map(|p| &**p));
-//    let mut iter = stmts.chain(expr).filter_map(|e| e);
-//    never_loop_expr_seq(&mut iter, main_loop_id)
+    let stmts = block.stmts.iter().map(stmt_to_expr);
+    let expr = once(block.expr.as_ref().map(|p| &**p));
+    let mut iter = stmts.chain(expr).filter_map(|e| e);
+    infinite_loop_exp_seq(&mut iter, main_loop_id)
+//    InfiniteLoopResult::Otherwise
 }
 
 enum InfiniteLoopResult {
     // Has break/return in the body of the loop
     MayBreak,
     Otherwise,
+}
+
+fn infinite_loop_exp_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T, main_loop_id: HirId) -> InfiniteLoopResult {
+    es.map(|e| infinite_loop_expr(e, main_loop_id))
+        .fold(InfiniteLoopResult::Otherwise, infinite_loop_combine_seq)
+}
+
+fn infinite_loop_combine_seq(first: InfiniteLoopResult, second: InfiniteLoopResult) -> InfiniteLoopResult {
+    match first {
+        InfiniteLoopResult::MayBreak => first,
+        InfiniteLoopResult::Otherwise => second,
+    }
+}
+
+fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
+    match expr.kind {
+        ExprKind::Ret(ref e) => {
+            InfiniteLoopResult::MayBreak
+        },
+        ExprKind::Break(d, ref e) => {
+//            let id = d
+//                .target_id
+//                .expect("target ID can only be missing in the presence of compilation errors");
+//            dbg!(&main_loop_id);
+//            dbg!(&id);
+//            dbg!(&main_loop_id == &id);
+//            // I am worried that checking loop_id here is not a good idea
+//            // consider 2 loops (outer and inner)
+//            // if inner loop break into outer loop label, then outer loop will be pass this check
+//            // but the inner loop will not
+//            // TODO: Check main_loop_id
+            InfiniteLoopResult::MayBreak
+        },
+        // TODO: Explicitly list all other options?
+        _ => InfiniteLoopResult::Otherwise,
+    }
 }
 
 /// Collects the set of variables in an expression
