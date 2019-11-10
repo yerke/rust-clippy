@@ -595,7 +595,6 @@ impl<'a, 'tcx> LateLintPass<'a, 'tcx> for Loops {
             }
         }
 
-//        dbg!(&expr);
         if let Some((cond, body)) = higher::while_loop(&expr) {
             check_infinite_loop(cx, cond, body);
         }
@@ -2352,20 +2351,16 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     };
     var_visitor.visit_expr(cond);
     if var_visitor.skip {
-        return; // condition had function or method call, stop analysis
+        return;
     }
     let used_in_condition = &var_visitor.ids;
     let no_cond_variable_mutated = if let Some(used_mutably) = mutated_variables(expr, cx) {
         used_in_condition.is_disjoint(&used_mutably)
     } else {
-        return; // possibly one of the condition vars was mutated, stop analysis
+        return;
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
-    // TODO: find breaks and returns here
-//    dbg!(&expr.kind);
-    // call infinite_loop_block here
     let has_break_or_return = if let ExprKind::Block(ref block, _) = expr.kind {
-//        dbg!("Got here");
         match infinite_loop_block(block, expr.hir_id) {
             InfiniteLoopResult::MayBreak => true,
             InfiniteLoopResult::Otherwise => false,
@@ -2373,7 +2368,6 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     } else {
         panic!("Expected block here always!");
     };
-//    dbg!(&has_break_or_return);
     if no_cond_variable_mutated && !mutable_static_in_cond && !has_break_or_return {
         span_lint(
             cx,
@@ -2391,7 +2385,7 @@ fn infinite_loop_block(block: &Block, main_loop_id: HirId) -> InfiniteLoopResult
     let stmts = block.stmts.iter().map(stmt_to_expr);
     let expr = once(block.expr.as_ref().map(|p| &**p));
     let mut iter = stmts.chain(expr).filter_map(|e| e);
-    infinite_loop_exp_seq(&mut iter, main_loop_id)
+    infinite_loop_expr_seq(&mut iter, main_loop_id)
 //    InfiniteLoopResult::Otherwise
 }
 
@@ -2401,7 +2395,7 @@ enum InfiniteLoopResult {
     Otherwise,
 }
 
-fn infinite_loop_exp_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T, main_loop_id: HirId) -> InfiniteLoopResult {
+fn infinite_loop_expr_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T, main_loop_id: HirId) -> InfiniteLoopResult {
     es.map(|e| infinite_loop_expr(e, main_loop_id))
         .fold(InfiniteLoopResult::Otherwise, infinite_loop_combine_seq)
 }
@@ -2415,16 +2409,13 @@ fn infinite_loop_combine_seq(first: InfiniteLoopResult, second: InfiniteLoopResu
 
 fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
     match expr.kind {
-        ExprKind::Ret(ref e) => {
+        ExprKind::Ret(_) => {
             InfiniteLoopResult::MayBreak
         },
-        ExprKind::Break(d, ref e) => {
+        ExprKind::Break(d, _) => {
 //            let id = d
 //                .target_id
 //                .expect("target ID can only be missing in the presence of compilation errors");
-//            dbg!(&main_loop_id);
-//            dbg!(&id);
-//            dbg!(&main_loop_id == &id);
 //            // I am worried that checking loop_id here is not a good idea
 //            // consider 2 loops (outer and inner)
 //            // if inner loop break into outer loop label, then outer loop will be pass this check
@@ -2432,8 +2423,44 @@ fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
 //            // TODO: Check main_loop_id
             InfiniteLoopResult::MayBreak
         },
-        // TODO: Explicitly list all other options?
-        _ => InfiniteLoopResult::Otherwise,
+        ExprKind::Box(ref e)
+        | ExprKind::Unary(_, ref e)
+        | ExprKind::Cast(ref e, _)
+        | ExprKind::Type(ref e, _)
+        | ExprKind::Field(ref e, _)
+        | ExprKind::AddrOf(_, ref e)
+        | ExprKind::Struct(_, _, Some(ref e))
+        | ExprKind::Repeat(ref e, _)
+        | ExprKind::DropTemps(ref e) => infinite_loop_expr(e, main_loop_id),
+        ExprKind::Array(ref es) | ExprKind::MethodCall(_, _, ref es) | ExprKind::Tup(ref es) => {
+            infinite_loop_expr_seq(&mut es.iter(), main_loop_id)
+        },
+        ExprKind::Call(ref e, ref es) => infinite_loop_expr_seq(&mut once(&**e).chain(es.iter()), main_loop_id),
+        ExprKind::Binary(_, ref e1, ref e2)
+        | ExprKind::Assign(ref e1, ref e2)
+        | ExprKind::AssignOp(_, ref e1, ref e2)
+        | ExprKind::Index(ref e1, ref e2) => infinite_loop_expr_seq(&mut [&**e1, &**e2].iter().cloned(), main_loop_id),
+        ExprKind::Loop(ref b, _, _) => {
+            infinite_loop_block(b, main_loop_id)
+        },
+        ExprKind::Match(ref e, ref arms, _) => {
+            let e = infinite_loop_expr(e, main_loop_id);
+            if arms.is_empty() {
+                e
+            } else {
+                let arms = infinite_loop_expr_seq(&mut arms.iter().map(|a| &*a.body), main_loop_id);
+                infinite_loop_combine_seq(e, arms)
+            }
+        },
+        ExprKind::Block(ref b, _) => infinite_loop_block(b, main_loop_id),
+        ExprKind::Continue(_) => InfiniteLoopResult::Otherwise,
+        ExprKind::Struct(_, _, None)
+        | ExprKind::Yield(_, _)
+        | ExprKind::Closure(_, _, _, _, _)
+        | ExprKind::InlineAsm(_, _, _)
+        | ExprKind::Path(_)
+        | ExprKind::Lit(_)
+        | ExprKind::Err => InfiniteLoopResult::Otherwise,
     }
 }
 
