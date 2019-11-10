@@ -2359,7 +2359,7 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
     let has_break_or_return = if let ExprKind::Block(ref block, _) = expr.kind {
-        match infinite_loop_block(block, expr.hir_id) {
+        match infinite_loop_block(block) {
             InfiniteLoopResult::MayBreak => true,
             InfiniteLoopResult::Otherwise => false,
         }
@@ -2378,12 +2378,11 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
 }
 
 // inspired by never_loop_block()
-// main_loop_id I get here is not really the one I need to track
-fn infinite_loop_block(block: &Block, main_loop_id: HirId) -> InfiniteLoopResult {
+fn infinite_loop_block(block: &Block) -> InfiniteLoopResult {
     let stmts = block.stmts.iter().map(stmt_to_expr);
     let expr = once(block.expr.as_ref().map(|p| &**p));
     let mut iter = stmts.chain(expr).filter_map(|e| e);
-    infinite_loop_expr_seq(&mut iter, main_loop_id)
+    infinite_loop_expr_seq(&mut iter)
 }
 
 enum InfiniteLoopResult {
@@ -2392,8 +2391,8 @@ enum InfiniteLoopResult {
     Otherwise,
 }
 
-fn infinite_loop_expr_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T, main_loop_id: HirId) -> InfiniteLoopResult {
-    es.map(|e| infinite_loop_expr(e, main_loop_id))
+fn infinite_loop_expr_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T) -> InfiniteLoopResult {
+    es.map(|e| infinite_loop_expr(e))
         .fold(InfiniteLoopResult::Otherwise, infinite_loop_combine_seq)
 }
 
@@ -2404,7 +2403,7 @@ fn infinite_loop_combine_seq(first: InfiniteLoopResult, second: InfiniteLoopResu
     }
 }
 
-fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
+fn infinite_loop_expr(expr: &Expr) -> InfiniteLoopResult {
     match expr.kind {
         ExprKind::Ret(_) => {
             InfiniteLoopResult::MayBreak
@@ -2420,28 +2419,28 @@ fn infinite_loop_expr(expr: &Expr, main_loop_id: HirId) -> InfiniteLoopResult {
         | ExprKind::AddrOf(_, ref e)
         | ExprKind::Struct(_, _, Some(ref e))
         | ExprKind::Repeat(ref e, _)
-        | ExprKind::DropTemps(ref e) => infinite_loop_expr(e, main_loop_id),
+        | ExprKind::DropTemps(ref e) => infinite_loop_expr(e),
         ExprKind::Array(ref es) | ExprKind::MethodCall(_, _, ref es) | ExprKind::Tup(ref es) => {
-            infinite_loop_expr_seq(&mut es.iter(), main_loop_id)
+            infinite_loop_expr_seq(&mut es.iter())
         },
-        ExprKind::Call(ref e, ref es) => infinite_loop_expr_seq(&mut once(&**e).chain(es.iter()), main_loop_id),
+        ExprKind::Call(ref e, ref es) => infinite_loop_expr_seq(&mut once(&**e).chain(es.iter())),
         ExprKind::Binary(_, ref e1, ref e2)
         | ExprKind::Assign(ref e1, ref e2)
         | ExprKind::AssignOp(_, ref e1, ref e2)
-        | ExprKind::Index(ref e1, ref e2) => infinite_loop_expr_seq(&mut [&**e1, &**e2].iter().cloned(), main_loop_id),
+        | ExprKind::Index(ref e1, ref e2) => infinite_loop_expr_seq(&mut [&**e1, &**e2].iter().cloned()),
         ExprKind::Loop(ref b, _, _) => {
-            infinite_loop_block(b, main_loop_id)
+            infinite_loop_block(b)
         },
         ExprKind::Match(ref e, ref arms, _) => {
-            let e = infinite_loop_expr(e, main_loop_id);
+            let e = infinite_loop_expr(e);
             if arms.is_empty() {
                 e
             } else {
-                let arms = infinite_loop_expr_seq(&mut arms.iter().map(|a| &*a.body), main_loop_id);
+                let arms = infinite_loop_expr_seq(&mut arms.iter().map(|a| &*a.body));
                 infinite_loop_combine_seq(e, arms)
             }
         },
-        ExprKind::Block(ref b, _) => infinite_loop_block(b, main_loop_id),
+        ExprKind::Block(ref b, _) => infinite_loop_block(b),
         ExprKind::Continue(_) => InfiniteLoopResult::Otherwise,
         ExprKind::Struct(_, _, None)
         | ExprKind::Yield(_, _)
