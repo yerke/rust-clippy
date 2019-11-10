@@ -2358,7 +2358,15 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
         return;
     };
     let mutable_static_in_cond = var_visitor.def_ids.iter().any(|(_, v)| *v);
-    if no_cond_variable_mutated && !mutable_static_in_cond {
+    let has_break_or_return = if let ExprKind::Block(ref block, _) = expr.kind {
+        match infinite_loop_block(block) {
+            InfiniteLoopResult::MayBreak => true,
+            InfiniteLoopResult::Otherwise => false,
+        }
+    } else {
+        panic!("Expected block here always!");
+    };
+    if no_cond_variable_mutated && !mutable_static_in_cond && !has_break_or_return {
         span_lint(
             cx,
             WHILE_IMMUTABLE_CONDITION,
@@ -2366,6 +2374,81 @@ fn check_infinite_loop<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, cond: &'tcx Expr, e
             "variables in the condition are not mutated in the loop body. \
              This may lead to an infinite or to a never running loop",
         );
+    }
+}
+
+// inspired by never_loop_block()
+fn infinite_loop_block(block: &Block) -> InfiniteLoopResult {
+    let stmts = block.stmts.iter().map(stmt_to_expr);
+    let expr = once(block.expr.as_ref().map(|p| &**p));
+    let mut iter = stmts.chain(expr).filter_map(|e| e);
+    infinite_loop_expr_seq(&mut iter)
+}
+
+enum InfiniteLoopResult {
+    // Has break/return in the body of the loop
+    MayBreak,
+    Otherwise,
+}
+
+fn infinite_loop_expr_seq<'a, T: Iterator<Item = &'a Expr>>(es: &mut T) -> InfiniteLoopResult {
+    es.map(|e| infinite_loop_expr(e))
+        .fold(InfiniteLoopResult::Otherwise, infinite_loop_combine_seq)
+}
+
+fn infinite_loop_combine_seq(first: InfiniteLoopResult, second: InfiniteLoopResult) -> InfiniteLoopResult {
+    match first {
+        InfiniteLoopResult::MayBreak => first,
+        InfiniteLoopResult::Otherwise => second,
+    }
+}
+
+fn infinite_loop_expr(expr: &Expr) -> InfiniteLoopResult {
+    match expr.kind {
+        ExprKind::Ret(_) => {
+            InfiniteLoopResult::MayBreak
+        },
+        ExprKind::Break(_, _) => {
+            InfiniteLoopResult::MayBreak
+        },
+        ExprKind::Box(ref e)
+        | ExprKind::Unary(_, ref e)
+        | ExprKind::Cast(ref e, _)
+        | ExprKind::Type(ref e, _)
+        | ExprKind::Field(ref e, _)
+        | ExprKind::AddrOf(_, ref e)
+        | ExprKind::Struct(_, _, Some(ref e))
+        | ExprKind::Repeat(ref e, _)
+        | ExprKind::DropTemps(ref e) => infinite_loop_expr(e),
+        ExprKind::Array(ref es) | ExprKind::MethodCall(_, _, ref es) | ExprKind::Tup(ref es) => {
+            infinite_loop_expr_seq(&mut es.iter())
+        },
+        ExprKind::Call(ref e, ref es) => infinite_loop_expr_seq(&mut once(&**e).chain(es.iter())),
+        ExprKind::Binary(_, ref e1, ref e2)
+        | ExprKind::Assign(ref e1, ref e2)
+        | ExprKind::AssignOp(_, ref e1, ref e2)
+        | ExprKind::Index(ref e1, ref e2) => infinite_loop_expr_seq(&mut [&**e1, &**e2].iter().cloned()),
+        ExprKind::Loop(ref b, _, _) => {
+            infinite_loop_block(b)
+        },
+        ExprKind::Match(ref e, ref arms, _) => {
+            let e = infinite_loop_expr(e);
+            if arms.is_empty() {
+                e
+            } else {
+                let arms = infinite_loop_expr_seq(&mut arms.iter().map(|a| &*a.body));
+                infinite_loop_combine_seq(e, arms)
+            }
+        },
+        ExprKind::Block(ref b, _) => infinite_loop_block(b),
+        ExprKind::Continue(_) => InfiniteLoopResult::Otherwise,
+        ExprKind::Struct(_, _, None)
+        | ExprKind::Yield(_, _)
+        | ExprKind::Closure(_, _, _, _, _)
+        | ExprKind::InlineAsm(_, _, _)
+        | ExprKind::Path(_)
+        | ExprKind::Lit(_)
+        | ExprKind::Err => InfiniteLoopResult::Otherwise,
     }
 }
 
